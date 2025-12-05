@@ -48,12 +48,17 @@ interface ProcessInvoiceResponse {
 interface ProcessBankStatementResponse {
   documentType: 'BANK_STATEMENT' | 'INVOICE';
   bankName: string;
+  totalWithdrawals?: number;
+  totalDeposits?: number;
   transactions: Array<{
-    id: number;
-    transaction_date: string;
+    id: string;
+    date: string;
     description: string;
-    amount: number;
-    balance: number;
+    type: string;
+    debit: number;
+    credit: number;
+    voucherType: string;
+    contraLedger: string;
   }>;
 }
 
@@ -128,6 +133,8 @@ export const parseBankStatementWithGemini = async (
 ): Promise<{
   documentType: 'INVOICE' | 'BANK_STATEMENT';
   bankName: string;
+  totalWithdrawals?: number;
+  totalDeposits?: number;
   transactions: BankTransaction[];
 }> => {
   try {
@@ -146,18 +153,30 @@ export const parseBankStatementWithGemini = async (
 
     const data: ProcessBankStatementResponse = await response.json();
 
+    console.log("✅ Bank Statement Response:", {
+      bankName: data.bankName,
+      totalWithdrawals: data.totalWithdrawals,
+      totalDeposits: data.totalDeposits,
+      transactionCount: data.transactions.length,
+    });
+
     // Transform backend response to frontend format
     return {
       documentType: data.documentType,
       bankName: data.bankName || "",
+      totalWithdrawals: data.totalWithdrawals || 0,
+      totalDeposits: data.totalDeposits || 0,
       transactions: data.transactions.map((tx) => ({
-        id: uuidv4(),
-        date: tx.transaction_date,
+        id: String(tx.id),
+        date: tx.date || "",
         description: tx.description || "",
-        withdrawal: tx.amount < 0 ? Math.abs(tx.amount) : 0,
-        deposit: tx.amount > 0 ? tx.amount : 0,
-        voucherType: tx.amount < 0 ? 'Payment' : 'Receipt',
-        contraLedger: "Suspense A/c",
+        type: tx.type || "Payment",
+        debit: tx.debit || 0,
+        credit: tx.credit || 0,
+        withdrawal: parseFloat(String(tx.debit || 0)),
+        deposit: parseFloat(String(tx.credit || 0)),
+        voucherType: tx.voucherType || "Payment",
+        contraLedger: tx.contraLedger || "Suspense A/c",
       })),
     };
   } catch (error) {

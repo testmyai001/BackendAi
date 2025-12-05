@@ -6,6 +6,7 @@ import { InvoiceData } from './types';
 export const TALLY_API_URL = process.env.REACT_APP_TALLY_URL || "http://localhost:9000";
 
 export const MOCK_INVOICE: InvoiceData = {
+  documentType: "INVOICE",
   supplierName: "Tech Solutions Pvt Ltd",
   supplierGstin: "27ABCDE1234F1Z5", 
   buyerName: "Global Traders Inc",
@@ -14,6 +15,7 @@ export const MOCK_INVOICE: InvoiceData = {
   // CHANGED TO 1st of Month for Tally EDU Compatibility
   invoiceDate: "01-08-2025", 
   voucherType: "Purchase",
+  targetCompany: "Demo Company",
   lineItems: [
     {
       id: "1",

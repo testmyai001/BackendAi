@@ -118,3 +118,4 @@ curl -X POST http://localhost:8000/tally/push/1
 - Ensure Poppler `pdftoppm` is available for pdf2image.
 - This code aims for clarity and feature parity with the described frontend logic moved server-side.
 C:\Program Files\Tesseract-OCR
+# BackendAi

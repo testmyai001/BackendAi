@@ -44,14 +44,15 @@ export interface InvoiceData {
 export interface BankTransaction {
   id: string;
   date: string;
-  description: string;
+  description: string;       // Narration field
+  type: "Receipt" | "Payment" | "Contra" | string; // Transaction type
 
   // Debit / Credit amounts as required by UI
-  withdrawal: number;  // debit
-  deposit: number;     // credit
+  debit: number;    // withdrawal amount (money out)
+  credit: number;   // deposit amount (money in)
 
   voucherType: "Payment" | "Receipt" | "Contra" | string;
-  contraLedger: string;
+  contraLedger: string;      // Expense/Party ledger
 }
 
 
@@ -59,6 +60,8 @@ export interface BankStatementData {
   documentType?: 'INVOICE' | 'BANK_STATEMENT'; // Classification flag
   bankName: string; // My Bank Ledger Name in Tally
   transactions: BankTransaction[];
+  totalDeposits?: number;   // Total credits
+  totalWithdrawals?: number; // Total debits
 }
 
 export interface ProcessedFile {

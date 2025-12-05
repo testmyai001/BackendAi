@@ -448,26 +448,59 @@ async def process_bank_statement(file: UploadFile = File(...), use_gemini_direct
         if 'error' in parsed_data:
             raise HTTPException(status_code=422, detail=f"Failed to parse bank statement: {parsed_data.get('error', 'Unknown error')}")
         
-        # Step 4: Format response (camelCase)
+        # Step 4: Format response with all required fields
         transactions = parsed_data.get("transactions", [])
-        formatted_transactions = [
-            {
+        total_withdrawals = 0.0
+        total_deposits = 0.0
+        
+        formatted_transactions = []
+        for tx in transactions:
+            withdrawal_amount = float(tx.get("withdrawal") or 0)
+            deposit_amount = float(tx.get("deposit") or 0)
+            debit_amount = float(tx.get("debit") or 0)
+            credit_amount = float(tx.get("credit") or 0)
+            
+            if debit_amount > 0 or credit_amount > 0:
+                final_debit = debit_amount
+                final_credit = credit_amount
+                tx_type = "Payment" if debit_amount > 0 else "Receipt"
+            elif withdrawal_amount > 0:
+                final_debit = withdrawal_amount
+                final_credit = 0.0
+                tx_type = "Payment"
+            elif deposit_amount > 0:
+                final_debit = 0.0
+                final_credit = deposit_amount
+                tx_type = "Receipt"
+            else:
+                final_debit = 0.0
+                final_credit = 0.0
+                tx_type = tx.get("voucherType", tx.get("type", "Receipt"))
+            
+            total_withdrawals += final_debit
+            total_deposits += final_credit
+            
+            formatted_transactions.append({
                 "id": str(uuid.uuid4()),
-                "transactionDate": tx.get("transaction_date", ""),
+                "date": tx.get("transaction_date", tx.get("date", "")),
                 "description": tx.get("description", ""),
-                "amount": float(tx.get("amount", 0) or 0),
-                "balance": float(tx.get("balance", 0) or 0) if tx.get("balance") else None,
-            }
-            for tx in transactions
-        ]
+                "type": tx_type,
+                "debit": round(final_debit, 2),
+                "credit": round(final_credit, 2),
+                "balance": float(tx.get("balance") or 0) if tx.get("balance") else None,
+                "voucherType": tx_type,
+                "contraLedger": tx.get("suggested_ledger", "Suspense A/c")
+            })
         
         return {
             "id": str(uuid.uuid4()),
             "documentType": "BANK_STATEMENT",
             "bankName": parsed_data.get("bankName", ""),
-            "statementDate": parsed_data.get("statementPeriod", ""),
-            "transactionCount": len(transactions),
-            "transactions": formatted_transactions
+            "statementDate": "",
+            "transactionCount": len(formatted_transactions),
+            "transactions": formatted_transactions,
+            "totalWithdrawals": round(total_withdrawals, 2),
+            "totalDeposits": round(total_deposits, 2)
         }
     
     except HTTPException:

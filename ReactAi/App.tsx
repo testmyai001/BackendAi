@@ -177,6 +177,7 @@ const App: React.FC = () => {
           file,
           fileName: file.name,
           status: 'Pending',
+          sourceType: 'OCR_INVOICE',
           correctEntries: 0,
           incorrectEntries: 0,
           timeTaken: '-',

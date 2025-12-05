@@ -178,7 +178,7 @@ export const parseInvoiceWithGemini = async (
       return {
         documentType: 'BANK_STATEMENT',
         supplierName: '', supplierGstin: '', buyerName: '', buyerGstin: '',
-        invoiceNumber: '', invoiceDate: '', voucherType: 'Purchase', lineItems: []
+        invoiceNumber: '', invoiceDate: '', voucherType: 'Purchase', targetCompany: '', lineItems: []
       };
   }
 

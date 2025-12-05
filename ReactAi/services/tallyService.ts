@@ -137,7 +137,7 @@ export const generateBankStatementXml = (data: BankStatementData, existingLedger
 
   data.transactions.forEach((txn) => {
     const dateXml = formatDateForXml(txn.date);
-    const amount = txn.voucherType === 'Payment' ? txn.withdrawal : txn.deposit;
+    const amount = (txn.type === 'Payment' || txn.voucherType === 'Payment') ? txn.debit : txn.credit;
     // const amountStr = amount.toFixed(2); // Not used directly in logic below
     const contraLedger = esc(txn.contraLedger);
     const narration = esc(txn.description);
@@ -147,7 +147,7 @@ export const generateBankStatementXml = (data: BankStatementData, existingLedger
     // RECEIPT: Debit Bank, Credit Income
     
     // In Tally XML, ISDEEMEDPOSITIVE = Yes means Debit, No means Credit.
-    const isPayment = txn.voucherType === 'Payment';
+    const isPayment = (txn.type === 'Payment' || txn.voucherType === 'Payment');
     
     // Bank Entry
     const bankDeemedPos = isPayment ? 'No' : 'Yes';

@@ -586,8 +586,8 @@ RETURN JSON FORMAT (EXACT):
                 ""
             )
 
-            withdrawal = tx.get('withdrawal') or 0
-            deposit = tx.get('deposit') or 0
+            withdrawal = float(tx.get('withdrawal') or 0)
+            deposit = float(tx.get('deposit') or 0)
 
             if withdrawal > 0:
                 debit = format_amount(withdrawal)
@@ -604,15 +604,19 @@ RETURN JSON FORMAT (EXACT):
 
             balance = tx.get("balance")
             if balance is not None:
-                balance = format_amount(balance)
+                balance = format_amount(float(balance))
 
             transactions.append({
+                "transaction_date": date_value,
                 "date": date_value,
                 "description": tx.get("description", ""),
+                "withdrawal": format_amount(withdrawal),
+                "deposit": format_amount(deposit),
                 "debit": debit,
                 "credit": credit,
                 "balance": balance,
                 "type": txn_type,
+                "voucherType": txn_type,
                 "suggested_ledger": tx.get("suggestedLedger", "Suspense A/c")
             })
 

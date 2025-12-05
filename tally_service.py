@@ -471,10 +471,118 @@ def push_to_tally(xml: str) -> Dict[str, Any]:
 
 
 def generate_bank_statement_xml(data: Any, existing_ledgers: Optional[Set[str]] = None) -> str:
-    """Generate Tally XML for bank statement"""
+    """
+    Generate Tally XML for bank statement vouchers.
+    Creates Payment/Receipt vouchers for each transaction.
+    """
     if existing_ledgers is None:
         existing_ledgers = set()
-    return "<ENVELOPE></ENVELOPE>"
+    
+    # Extract data safely
+    bank_name = str(data.get("bankName", "Bank Account"))
+    transactions = data.get("transactions", [])
+    
+    # Ensure bank ledger exists
+    bank_ledger = clean_name(bank_name) or "Bank Account"
+    
+    # Create masters for bank ledger if needed
+    masters_xml = ""
+    if bank_ledger not in existing_ledgers:
+        masters_xml += f"""
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <LEDGER NAME="{esc(bank_ledger)}" ACTION="Create">
+        <NAME.LIST><NAME>{esc(bank_ledger)}</NAME></NAME.LIST>
+        <PARENT>Bank Accounts</PARENT>
+        <ISBANK>Yes</ISBANK>
+      </LEDGER>
+    </TALLYMESSAGE>"""
+        existing_ledgers.add(bank_ledger)
+    
+    # Create vouchers for each transaction
+    vouchers_xml = ""
+    for idx, tx in enumerate(transactions):
+        tx_date = format_date_for_xml(tx.get("date", ""))
+        tx_desc = str(tx.get("description", ""))
+        tx_type = str(tx.get("type", "Receipt")).strip()
+        debit = float(tx.get("debit", 0) or 0)
+        credit = float(tx.get("credit", 0) or 0)
+        contra_ledger = clean_name(tx.get("contraLedger", "Suspense"))
+        
+        # Determine voucher type
+        if debit > 0:
+            voucher_type = "Payment"
+            amount = debit
+        else:
+            voucher_type = "Receipt"
+            amount = credit
+        
+        # Ensure contra ledger exists
+        if contra_ledger and contra_ledger not in existing_ledgers:
+            masters_xml += f"""
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <LEDGER NAME="{esc(contra_ledger)}" ACTION="Create">
+        <NAME.LIST><NAME>{esc(contra_ledger)}</NAME></NAME.LIST>
+        <PARENT>Sundry Expenses</PARENT>
+      </LEDGER>
+    </TALLYMESSAGE>"""
+            existing_ledgers.add(contra_ledger)
+        
+        # Create voucher
+        guid = str(uuid.uuid4())
+        vch_key = f"{uuid.uuid4()}:00000008"
+        
+        if voucher_type == "Payment":
+            # Payment Voucher: Bank (Dr) / Contra Ledger (Cr)
+            vouchers_xml += f"""
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <VOUCHER VCHTYPE="Payment" ACTION="Create">
+        <GUID>{guid}</GUID>
+        <VOUCHERKEY>{vch_key}</VOUCHERKEY>
+        <VCHNUM>{idx + 1}</VCHNUM>
+        <VCHDATE>{tx_date}</VCHDATE>
+        <REFERENCE>{esc(tx_desc)}</REFERENCE>
+        <NARRATION>{esc(tx_desc)}</NARRATION>
+        <ALLLEDGERENTRIES.LIST>
+          <ALLLEDGERENTRIES>
+            <LEDGERNAME>{esc(bank_ledger)}</LEDGERNAME>
+            <DEBIT>{round_val(amount)}</DEBIT>
+            <CREDIT>0.00</CREDIT>
+          </ALLLEDGERENTRIES>
+          <ALLLEDGERENTRIES>
+            <LEDGERNAME>{esc(contra_ledger)}</LEDGERNAME>
+            <DEBIT>0.00</DEBIT>
+            <CREDIT>{round_val(amount)}</CREDIT>
+          </ALLLEDGERENTRIES>
+        </ALLLEDGERENTRIES.LIST>
+      </VOUCHER>
+    </TALLYMESSAGE>"""
+        else:
+            # Receipt Voucher: Bank (Cr) / Contra Ledger (Dr)
+            vouchers_xml += f"""
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+      <VOUCHER VCHTYPE="Receipt" ACTION="Create">
+        <GUID>{guid}</GUID>
+        <VOUCHERKEY>{vch_key}</VOUCHERKEY>
+        <VCHNUM>{idx + 1}</VCHNUM>
+        <VCHDATE>{tx_date}</VCHDATE>
+        <REFERENCE>{esc(tx_desc)}</REFERENCE>
+        <NARRATION>{esc(tx_desc)}</NARRATION>
+        <ALLLEDGERENTRIES.LIST>
+          <ALLLEDGERENTRIES>
+            <LEDGERNAME>{esc(contra_ledger)}</LEDGERNAME>
+            <DEBIT>{round_val(amount)}</DEBIT>
+            <CREDIT>0.00</CREDIT>
+          </ALLLEDGERENTRIES>
+          <ALLLEDGERENTRIES>
+            <LEDGERNAME>{esc(bank_ledger)}</LEDGERNAME>
+            <DEBIT>0.00</DEBIT>
+            <CREDIT>{round_val(amount)}</CREDIT>
+          </ALLLEDGERENTRIES>
+        </ALLLEDGERENTRIES.LIST>
+      </VOUCHER>
+    </TALLYMESSAGE>"""
+    
+    return masters_xml + vouchers_xml
 
 
 def tally_proxy_push(tally_url: str, xml_data: str) -> Dict[str, Any]:

@@ -213,8 +213,9 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
           id: uuidv4(),
           date: new Date().toISOString().slice(0, 10),
           description: 'New Transaction',
-          withdrawal: 0,
-          deposit: 0,
+          type: 'Payment',
+          debit: 0,
+          credit: 0,
           voucherType: 'Payment',
           contraLedger: 'Suspense A/c'
         }
@@ -430,8 +431,8 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
                            </td>
                            <td className="p-2">
                                <select 
-                                 value={txn.voucherType}
-                                 onChange={(e) => handleTransactionChange(txn.id, 'voucherType', e.target.value)}
+                                 value={txn.type}
+                                 onChange={(e) => handleTransactionChange(txn.id, 'type', e.target.value)}
                                  className={inputClass}
                                >
                                   <option value="Payment">Payment</option>
@@ -442,17 +443,17 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
                            <td className="p-2">
                               <input 
                                 type="number" 
-                                value={txn.withdrawal} 
-                                onChange={(e) => handleTransactionChange(txn.id, 'withdrawal', parseFloat(e.target.value) || 0)}
-                                className={`${inputClass} text-right ${txn.withdrawal > 0 ? 'font-bold text-red-600 dark:text-red-400' : 'text-slate-400'}`}
+                                value={txn.debit} 
+                                onChange={(e) => handleTransactionChange(txn.id, 'debit', parseFloat(e.target.value) || 0)}
+                                className={`${inputClass} text-right ${txn.debit > 0 ? 'font-bold text-red-600 dark:text-red-400' : 'text-slate-400'}`}
                               />
                            </td>
                            <td className="p-2">
                               <input 
                                 type="number" 
-                                value={txn.deposit} 
-                                onChange={(e) => handleTransactionChange(txn.id, 'deposit', parseFloat(e.target.value) || 0)}
-                                className={`${inputClass} text-right ${txn.deposit > 0 ? 'font-bold text-green-600 dark:text-green-400' : 'text-slate-400'}`}
+                                value={txn.credit} 
+                                onChange={(e) => handleTransactionChange(txn.id, 'credit', parseFloat(e.target.value) || 0)}
+                                className={`${inputClass} text-right ${txn.credit > 0 ? 'font-bold text-green-600 dark:text-green-400' : 'text-slate-400'}`}
                               />
                            </td>
                            <td className="p-2">
@@ -480,8 +481,8 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
                    + Add Empty Row
                 </button>
                 <div className="flex gap-4 text-sm font-bold text-slate-700 dark:text-slate-300">
-                   <span>Total Withdrawals: <span className="text-red-600">{data.transactions.reduce((sum, t) => sum + (t.withdrawal||0), 0).toFixed(2)}</span></span>
-                   <span>Total Deposits: <span className="text-green-600">{data.transactions.reduce((sum, t) => sum + (t.deposit||0), 0).toFixed(2)}</span></span>
+                   <span>Total Withdrawals: <span className="text-red-600">{(data.totalWithdrawals || data.transactions.reduce((sum, t) => sum + (t.debit||0), 0)).toFixed(2)}</span></span>
+                   <span>Total Deposits: <span className="text-green-600">{(data.totalDeposits || data.transactions.reduce((sum, t) => sum + (t.credit||0), 0)).toFixed(2)}</span></span>
                 </div>
             </div>
         </div>

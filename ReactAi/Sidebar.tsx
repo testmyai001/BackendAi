@@ -1,7 +1,7 @@
 
 import React from 'react';
 import { LayoutDashboard, UploadCloud, FileText, Activity, Settings, MessageSquareText, ScanEye, Landmark } from 'lucide-react';
-import { AppView } from '../types';
+import { AppView } from './types';
 
 interface SidebarProps {
   currentView: AppView;

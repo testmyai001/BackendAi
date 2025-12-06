@@ -1,5 +1,5 @@
 
-import React, { useState } from 'react';
+import React, { useState, useRef, useEffect } from 'react';
 import { 
   BarChart2, 
   CheckSquare, 
@@ -45,6 +45,13 @@ const Dashboard: React.FC<DashboardProps> = ({
   onFilterChange
 }) => {
   const [isFilterOpen, setIsFilterOpen] = useState(false);
+  const scrollContainerRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (scrollContainerRef.current && files.length > 0) {
+      scrollContainerRef.current.scrollTop = scrollContainerRef.current.scrollHeight;
+    }
+  }, [files]);
 
   // Computed Statistics (based on ALL files, not just filtered)
   const totalFiles = files.length;
@@ -61,10 +68,11 @@ const Dashboard: React.FC<DashboardProps> = ({
   const processingPercentage = totalFiles === 0 ? 0 : Math.round(((successFiles + failedFiles) / totalFiles) * 100);
 
   return (
-    <div className="flex flex-col h-full gap-6 overflow-y-auto pb-4 scrollbar-hide animate-fade-in relative">
+    <div className="flex flex-col h-full w-full overflow-auto">
+      <div ref={scrollContainerRef} className="flex flex-col gap-6 pb-4 px-6 animate-fade-in relative">
       
-      {/* Header Actions Row */}
-      <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 relative z-20">
+        {/* Header Actions Row */}
+        <div className="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 relative z-20 pt-6 flex-shrink-0">
           <div className="flex flex-col">
             <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100">Dashboard</h2>
             <p className="text-sm text-slate-500 dark:text-slate-400">Overview of your invoice processing pipeline</p>
@@ -93,10 +101,10 @@ const Dashboard: React.FC<DashboardProps> = ({
                 {isPushing ? 'Pushing...' : `Push All (${readyToPushFiles})`}
             </button>
           </div>
-      </div>
+        </div>
 
-      {/* Status Overview Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4">
+        {/* Status Overview Cards */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 flex-shrink-0">
           {/* Total Invoices */}
           <div className="bg-white dark:bg-slate-800 p-5 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex flex-col justify-between h-32 hover:shadow-md transition-shadow">
           <div className="flex justify-between items-start">
@@ -151,12 +159,12 @@ const Dashboard: React.FC<DashboardProps> = ({
           </div>
           <span className="text-sm font-medium text-orange-800 dark:text-orange-400">Incorrect Entries<br/>Passed</span>
           </div>
-      </div>
+        </div>
 
-      {/* Invoices Table Section */}
-      <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex-1 flex flex-col min-h-[400px]">
-        {/* Table Header / Toolbar */}
-        <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        {/* Invoices Table Section */}
+        <div className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-sm flex-1 flex flex-col min-h-0 overflow-hidden">
+          {/* Table Header / Toolbar */}
+          <div className="p-6 border-b border-slate-200 dark:border-slate-700 flex flex-col md:flex-row md:items-center justify-between gap-4 flex-shrink-0">
           <h3 className="font-bold text-slate-900 dark:text-white text-lg">Invoices Table</h3>
           <div className="flex items-center gap-3">
              <div className="relative">
@@ -201,8 +209,8 @@ const Dashboard: React.FC<DashboardProps> = ({
         </div>
 
         {/* Table Content */}
-        <div className="flex-1 overflow-x-auto">
-          <table className="w-full text-sm text-left">
+       <div className="flex-1">
+           <table className="w-full text-sm text-left">
             <thead className="text-xs text-slate-500 dark:text-slate-400 uppercase bg-slate-50 dark:bg-slate-700/50 border-b border-slate-200 dark:border-slate-700">
               <tr>
                 <th className="px-6 py-4 font-semibold whitespace-nowrap">File Name</th>
@@ -312,6 +320,7 @@ const Dashboard: React.FC<DashboardProps> = ({
               </button>
            </div>
         </div>
+      </div>
       </div>
     </div>
   );

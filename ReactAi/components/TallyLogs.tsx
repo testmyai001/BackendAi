@@ -7,8 +7,17 @@ interface TallyLogsProps {
 }
 
 const TallyLogs: React.FC<TallyLogsProps> = ({ logs }) => {
+  const logsContainerRef = React.useRef<HTMLDivElement>(null);
+  
+  // Auto-scroll to bottom when new logs are added
+  React.useEffect(() => {
+    if (logsContainerRef.current) {
+      logsContainerRef.current.scrollTop = logsContainerRef.current.scrollHeight;
+    }
+  }, [logs]);
+
   return (
-    <div className="bg-slate-900 rounded-xl shadow-lg border border-slate-800 overflow-hidden flex flex-col h-[300px]">
+    <div className="bg-slate-900 rounded-xl shadow-lg border border-slate-800 overflow-hidden flex flex-col w-full h-full">
       <div className="bg-slate-950 px-5 py-3 border-b border-slate-800 flex justify-between items-center shrink-0">
           <div className="flex items-center gap-3">
             <Terminal className="w-4 h-4 text-green-400" />
@@ -21,7 +30,7 @@ const TallyLogs: React.FC<TallyLogsProps> = ({ logs }) => {
           </div>
       </div>
       
-      <div className="flex-1 overflow-auto p-2 font-mono text-xs scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900">
+      <div ref={logsContainerRef} className="flex-1 overflow-auto p-2 font-mono text-xs scrollbar-thin scrollbar-thumb-slate-700 scrollbar-track-slate-900 min-h-0">
         <div className="space-y-1">
           {logs.length === 0 && (
             <div className="h-full flex flex-col items-center justify-center text-slate-600 opacity-50 mt-12">

@@ -26,6 +26,13 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [showInvoiceAlert, setShowInvoiceAlert] = useState(false);
   const [hasDraft, setHasDraft] = useState(false);
+  const pageScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (pageScrollRef.current && data.transactions.length > 0) {
+      pageScrollRef.current.scrollTop = pageScrollRef.current.scrollHeight;
+    }
+  }, [data.transactions]);
 
   useEffect(() => {
     const saved = localStorage.getItem('autotally_bank_draft');
@@ -209,7 +216,7 @@ const BankStatementManager: React.FC<BankStatementManagerProps> = ({
   const inputClass = "w-full px-2 py-1.5 border border-slate-300 dark:border-slate-600 rounded bg-white dark:bg-slate-700 text-slate-900 dark:text-white text-sm focus:ring-2 focus:ring-tally-500 outline-none";
 
   return (
-    <div className="flex flex-col h-full gap-6 animate-fade-in relative">
+    <div ref={pageScrollRef} className="flex flex-col h-full gap-6 animate-fade-in relative">
       {showInvoiceAlert && (
         <div className="absolute inset-0 z-50 flex items-center justify-center bg-slate-900/60 backdrop-blur-sm rounded-xl animate-fade-in">
           <div className="bg-white dark:bg-slate-800 p-8 rounded-xl shadow-2xl border-2 border-orange-400 max-w-md w-full text-center">

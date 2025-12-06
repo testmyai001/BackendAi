@@ -1,82 +1,40 @@
-import React, { useState, useEffect } from 'react';
-import { X, Save, Server, Key, Box, CheckCircle2, AlertTriangle, Loader2, Wifi, WifiOff } from 'lucide-react';
-import { AISettings } from '../types';
+import React, { useState } from 'react';
+import { X, Moon, Sun, Shield, Trash2, Monitor, RefreshCw, CheckCircle2, AlertTriangle } from 'lucide-react';
+import { removePin } from '../services/authService';
 
 interface SettingsModalProps {
   onClose: () => void;
+  darkMode: boolean;
+  toggleDarkMode: () => void;
 }
 
-const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
-  const [settings, setSettings] = useState<AISettings>({
-    model: 'gemini-2.5-flash',
-    apiKey: '',
-    tallyCompany: ''
-  });
-  const [isSaved, setIsSaved] = useState(false);
-  const [testStatus, setTestStatus] = useState<'idle' | 'testing' | 'success' | 'error'>('idle');
-  const [testMessage, setTestMessage] = useState('');
+const SettingsModal: React.FC<SettingsModalProps> = ({ onClose, darkMode, toggleDarkMode }) => {
+  const [confirmReset, setConfirmReset] = useState(false);
 
-  useEffect(() => {
-    const saved = localStorage.getItem('autotally_ai_settings');
-    if (saved) {
-      setSettings(JSON.parse(saved));
+  const handleResetPin = () => {
+    removePin();
+    window.location.reload(); // Reload to force re-auth setup
+  };
+
+  const handleClearData = () => {
+    if (confirmReset) {
+      localStorage.clear();
+      window.location.reload();
+    } else {
+      setConfirmReset(true);
     }
-  }, []);
-
-  const handleChange = (field: keyof AISettings, value: string) => {
-    setSettings(prev => ({ ...prev, [field]: value }));
-    setTestStatus('idle');
   };
 
-  const handleSave = () => {
-    localStorage.setItem('autotally_ai_settings', JSON.stringify(settings));
-    setIsSaved(true);
-    setTimeout(() => {
-        setIsSaved(false);
-        onClose();
-    }, 1000);
-  };
-
-  const handleTestConnection = async () => {
-      if (!settings.apiKey) {
-          setTestStatus('error');
-          setTestMessage('Please enter an API Key first.');
-          return;
-      }
-      
-      setTestStatus('testing');
-      setTestMessage('');
-      
-      try {
-          // Test by making a simple request to the backend
-          const response = await fetch('http://127.0.0.1:8000/health', {
-              method: 'GET'
-          });
-          
-          if (response.ok) {
-              setTestStatus('success');
-              setTestMessage('Backend connection successful');
-          } else {
-              setTestStatus('error');
-              setTestMessage('Backend is not responding correctly');
-          }
-      } catch (error) {
-          setTestStatus('error');
-          let msg = "Connection Failed";
-          if (error instanceof Error) msg = error.message;
-          setTestMessage(msg);
-      }
-  };
 
   return (
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-slate-900/70 backdrop-blur-sm p-4 animate-fade-in">
-      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-lg overflow-hidden flex flex-col max-h-[90vh]">
+      <div className="bg-white dark:bg-slate-800 rounded-xl shadow-2xl border border-slate-200 dark:border-slate-700 w-full max-w-md overflow-hidden flex flex-col">
         
         {/* Header */}
-        <div className="p-5 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50 shrink-0">
+        <div className="p-5 border-b border-slate-200 dark:border-slate-700 flex justify-between items-center bg-slate-50 dark:bg-slate-900/50">
           <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
-            <Server className="w-5 h-5 text-indigo-500" />
-            AutoTally Settings
+            <Monitor className="w-5 h-5 text-indigo-500" />
+            Website Settings
           </h3>
           <button onClick={onClose} className="text-slate-400 hover:text-red-500 transition-colors">
             <X className="w-5 h-5" />
@@ -84,97 +42,79 @@ const SettingsModal: React.FC<SettingsModalProps> = ({ onClose }) => {
         </div>
 
         {/* Body */}
-        <div className="p-6 space-y-6 overflow-y-auto">
+        <div className="p-6 space-y-8">
             
-            {/* API Key */}
-            <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
-                    <Key className="w-4 h-4" />
-                    Model Name
-                </label>
-                <input 
-                    type="text" 
-                    value={settings.model}
-                    onChange={(e) => handleChange('model', e.target.value)}
-                    placeholder="gemini-2.5-flash"
-                    className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white"
-                />
-                <p className="text-xs text-slate-500">
-                    Leave empty to use default model (gemini-2.5-flash).
-                </p>
-            </div>
-
-            {/* Tally Company */}
-            <div className="space-y-2">
-                <label className="text-sm font-semibold text-slate-700 dark:text-slate-300 flex items-center gap-2">
-                    <Box className="w-4 h-4" />
-                    Tally Company Name
-                </label>
-                <input 
-                    type="text" 
-                    value={settings.tallyCompany || ''}
-                    onChange={(e) => handleChange('tallyCompany', e.target.value)}
-                    placeholder="e.g., My Company Ltd"
-                    className="w-full px-4 py-2 bg-slate-50 dark:bg-slate-900 border border-slate-300 dark:border-slate-600 rounded-lg text-sm focus:ring-2 focus:ring-indigo-500 outline-none dark:text-white"
-                />
-                <p className="text-xs text-slate-500">
-                    Leave empty to use currently open company in Tally
-                </p>
-            </div>
-
-            {/* Test Connection */}
-             <div className="flex flex-col gap-2">
-                <button 
-                    onClick={handleTestConnection}
-                    disabled={testStatus === 'testing'}
-                    className={`
-                        px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition-all w-fit
-                        ${testStatus === 'idle' ? 'bg-slate-200 dark:bg-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-300 dark:hover:bg-slate-600' : ''}
-                        ${testStatus === 'testing' ? 'bg-slate-100 text-slate-400 cursor-wait' : ''}
-                        ${testStatus === 'success' ? 'bg-green-100 text-green-700 border border-green-300' : ''}
-                        ${testStatus === 'error' ? 'bg-red-100 text-red-700 border border-red-300' : ''}
-                    `}
-                >
-                    {testStatus === 'idle' && <Wifi className="w-4 h-4" />}
-                    {testStatus === 'testing' && <Loader2 className="w-4 h-4 animate-spin" />}
-                    {testStatus === 'success' && <CheckCircle2 className="w-4 h-4" />}
-                    {testStatus === 'error' && <WifiOff className="w-4 h-4" />}
-                    
-                    {testStatus === 'idle' && "Test Connection"}
-                    {testStatus === 'testing' && "Testing..."}
-                    {testStatus === 'success' && "Connected"}
-                    {testStatus === 'error' && "Connection Failed"}
-                </button>
-                
-                {testStatus === 'error' && (
-                    <div className="text-xs text-red-500 font-medium bg-red-50 dark:bg-red-900/20 p-2 rounded border border-red-100 dark:border-red-900 break-words">
-                        {testMessage}
+            {/* Appearance Section */}
+            <div>
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Appearance</h4>
+                <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-700">
+                    <div className="flex items-center gap-3">
+                        <div className={`p-2 rounded-lg ${darkMode ? 'bg-indigo-900/30 text-indigo-400' : 'bg-amber-100 text-amber-600'}`}>
+                            {darkMode ? <Moon className="w-5 h-5" /> : <Sun className="w-5 h-5" />}
+                        </div>
+                        <div>
+                            <p className="font-semibold text-slate-700 dark:text-slate-200 text-sm">Dark Mode</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">{darkMode ? 'Active' : 'Inactive'}</p>
+                        </div>
                     </div>
-                )}
+                    <button 
+                        onClick={toggleDarkMode}
+                        className={`relative inline-flex h-6 w-11 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:ring-offset-2 ${darkMode ? 'bg-indigo-600' : 'bg-slate-200'}`}
+                    >
+                        <span className={`inline-block h-4 w-4 transform rounded-full bg-white transition-transform ${darkMode ? 'translate-x-6' : 'translate-x-1'}`} />
+                    </button>
+                </div>
             </div>
 
-            <div className="bg-blue-50 dark:bg-blue-900/20 border border-blue-200 dark:border-blue-800 rounded-lg p-4 text-xs text-blue-700 dark:text-blue-300">
-                <p className="font-semibold mb-1">API Key Management</p>
-                <p>API Keys are managed at the backend level (in your Python environment). Frontend settings are for configuration only.</p>
+            {/* Security Section */}
+            <div>
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Security</h4>
+                <div className="flex items-center justify-between p-4 bg-slate-50 dark:bg-slate-900 rounded-xl border border-slate-100 dark:border-slate-700">
+                    <div className="flex items-center gap-3">
+                        <div className="p-2 rounded-lg bg-emerald-100 dark:bg-emerald-900/30 text-emerald-600 dark:text-emerald-400">
+                            <Shield className="w-5 h-5" />
+                        </div>
+                        <div>
+                            <p className="font-semibold text-slate-700 dark:text-slate-200 text-sm">Security PIN</p>
+                            <p className="text-xs text-slate-500 dark:text-slate-400">Protect access to this device</p>
+                        </div>
+                    </div>
+                    <button 
+                        onClick={handleResetPin}
+                        className="px-3 py-1.5 text-xs font-bold text-slate-600 dark:text-slate-300 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-600 rounded-lg hover:bg-slate-50 dark:hover:bg-slate-700 transition-colors flex items-center gap-1"
+                    >
+                        <RefreshCw className="w-3 h-3" /> Reset
+                    </button>
+                </div>
             </div>
 
-        </div>
+            {/* Data Section */}
+            <div>
+                <h4 className="text-xs font-bold text-slate-400 uppercase tracking-wider mb-4">Data Management</h4>
+                <div className="p-4 bg-red-50 dark:bg-red-900/10 rounded-xl border border-red-100 dark:border-red-900/30">
+                    <div className="flex items-start gap-3 mb-4">
+                        <AlertTriangle className="w-5 h-5 text-red-500 mt-0.5" />
+                        <div>
+                            <p className="font-bold text-red-800 dark:text-red-400 text-sm">Clear Application Data</p>
+                            <p className="text-xs text-red-600 dark:text-red-300 mt-1">
+                                This will remove all local logs, saved drafts, and reset your PIN. This action cannot be undone.
+                            </p>
+                        </div>
+                    </div>
+                    <button 
+                        onClick={handleClearData}
+                        className={`w-full py-2 rounded-lg text-sm font-bold flex items-center justify-center gap-2 transition-all ${
+                            confirmReset 
+                            ? 'bg-red-600 text-white hover:bg-red-700 shadow-md' 
+                            : 'bg-white dark:bg-slate-800 text-red-600 dark:text-red-400 border border-red-200 dark:border-red-800 hover:bg-red-50 dark:hover:bg-red-900/20'
+                        }`}
+                    >
+                        <Trash2 className="w-4 h-4" />
+                        {confirmReset ? 'Click again to confirm' : 'Clear All Data'}
+                    </button>
+                </div>
+            </div>
 
-        {/* Footer */}
-        <div className="p-5 border-t border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-end gap-3 shrink-0">
-            <button 
-                onClick={onClose}
-                className="px-4 py-2 text-sm font-medium text-slate-600 dark:text-slate-300 hover:text-slate-800 dark:hover:text-white"
-            >
-                Cancel
-            </button>
-            <button 
-                onClick={handleSave}
-                className={`px-6 py-2 rounded-lg text-sm font-bold text-white transition-all flex items-center gap-2 ${isSaved ? 'bg-green-600' : 'bg-indigo-600 hover:bg-indigo-700'}`}
-            >
-                <Save className="w-4 h-4" />
-                {isSaved ? 'Saved!' : 'Save Settings'}
-            </button>
         </div>
       </div>
     </div>

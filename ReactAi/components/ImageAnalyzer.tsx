@@ -1,5 +1,5 @@
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useRef, useEffect } from 'react';
 import { Upload, Loader2, Image as ImageIcon, ScanEye, X, History, ChevronRight, Clock, FileText } from 'lucide-react';
 import { analyzeImageWithGemini } from '../services/backendService';
 import { v4 as uuidv4 } from 'uuid';
@@ -23,6 +23,13 @@ const ImageAnalyzer: React.FC = () => {
   const [prompt, setPrompt] = useState('');
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
+  const pageScrollRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (pageScrollRef.current && currentSessionId) {
+      pageScrollRef.current.scrollTop = pageScrollRef.current.scrollHeight;
+    }
+  }, [currentSessionId, sessions]);
 
   // If we are viewing a history item
   const currentSession = sessions.find(s => s.id === currentSessionId);
@@ -100,11 +107,11 @@ const ImageAnalyzer: React.FC = () => {
   const isPdf = activeFile?.type === 'application/pdf';
 
   return (
-    <div className="h-full flex gap-6 animate-fade-in">
+    <div ref={pageScrollRef} className="h-full w-full flex gap-6 animate-fade-in overflow-auto">
         
         {/* Left: History Sidebar */}
-        <div className="w-64 flex flex-col bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden shrink-0">
-             <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex items-center justify-between">
+        <div className="w-64 flex flex-col bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden shrink-0 flex-shrink-0">
+             <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex items-center justify-between flex-shrink-0">
                 <h3 className="font-bold text-slate-700 dark:text-slate-200 flex items-center gap-2 text-sm">
                     <History className="w-4 h-4" />
                     History
@@ -116,7 +123,7 @@ const ImageAnalyzer: React.FC = () => {
                     + NEW
                 </button>
              </div>
-             <div className="flex-1 overflow-y-auto p-2 space-y-2">
+             <div className="flex-1 p-2 space-y-2">
                  {sessions.length === 0 && (
                      <div className="text-center p-4 text-xs text-slate-400 italic">
                          No analysis history yet.
@@ -150,12 +157,12 @@ const ImageAnalyzer: React.FC = () => {
         </div>
 
         {/* Middle: Main Content */}
-        <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 min-w-0">
+        <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-6 min-w-0 overflow-hidden">
              
              {/* Upload / File View */}
-             <div className="flex flex-col gap-6 h-full min-h-[400px]">
+             <div className="flex flex-col gap-6 h-full min-h-0 overflow-y-auto overflow-x-hidden">
                 <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col flex-1 transition-colors relative">
-                    <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-between items-center">
+                    <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-between items-center flex-shrink-0">
                         <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
                             <ImageIcon className="w-5 h-5 text-purple-500" />
                             {currentSession ? 'Analyzed Document' : 'Document Input'}
@@ -247,14 +254,14 @@ const ImageAnalyzer: React.FC = () => {
             </div>
 
             {/* Results */}
-            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col h-full transition-colors">
-                <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50">
+            <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 overflow-hidden flex flex-col h-full min-h-0 transition-colors">
+                <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex-shrink-0">
                     <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
                         <ScanEye className="w-5 h-5 text-emerald-500" />
                         Analysis Result
                     </h3>
                 </div>
-                <div className="flex-1 p-6 overflow-auto bg-slate-50/50 dark:bg-slate-900/30">
+               <div className="flex-1 p-6 bg-slate-50/50 dark:bg-slate-900/30">
                     {displayResult ? (
                         <div className="prose prose-sm dark:prose-invert max-w-none text-slate-700 dark:text-slate-300 whitespace-pre-wrap leading-relaxed">
                             {displayResult}

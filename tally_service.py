@@ -74,7 +74,7 @@ def generate_tally_xml(invoice: Any, line_items: Any = None, existing_ledgers: O
     date_xml = format_date_for_xml(invoice_date)
     guid = str(uuid.uuid4())
     remote_id = str(uuid.uuid4())
-    vch_key = f"{uuid.uuid4()}:00000008"
+    vch_key = f"{uuid.uuid4()}:000000c8"
     sv_company = "##SVCurrentCompany"
 
     party_name = clean_name(supplier_name if not is_sales else buyer_name_str)
@@ -86,7 +86,9 @@ def generate_tally_xml(invoice: Any, line_items: Any = None, existing_ledgers: O
     party_gstin = supplier_gstin_clean if not is_sales else buyer_gstin_clean
     party_state = get_state_name(party_gstin) or 'Maharashtra'
 
-    is_inter_state = False
+    # Determine if inter-state (home state = 27 Maharashtra)
+    is_valid_gstin = len(party_gstin) == 15
+    is_inter_state = is_valid_gstin and party_gstin[:2] != "27"
 
     item_sign = -1 if not is_sales else 1
 
@@ -120,37 +122,63 @@ def generate_tally_xml(invoice: Any, line_items: Any = None, existing_ledgers: O
         item_desc = str(getattr(item, 'description', None) or '')
         rate = int(item_gst_rate) if item_gst_rate == int(item_gst_rate) else item_gst_rate
         unique_rates.add(rate)
-        item_name = clean_name(item_desc) or f"Item @ {rate}%"
-        masters_xml += f"""
-    <TALLYMESSAGE xmlns:UDF="TallyUDF">
-      <STOCKITEM NAME="{esc(item_name)}" ACTION="Create">
-        <NAME.LIST><NAME>{esc(item_name)}</NAME></NAME.LIST>
-        <PARENT>Primary</PARENT>
-        <BASEUNITS>Nos</BASEUNITS>
-        <OPENINGBALANCE>0 Nos</OPENINGBALANCE>
-        <ISGSTAPPLICABLE>Yes</ISGSTAPPLICABLE>
-        <GSTRATE>{rate}</GSTRATE>
-      </STOCKITEM>
-    </TALLYMESSAGE>"""
 
-    # rate ledgers & tax ledgers
+    # Create Purchase Ledgers
     for rate in unique_rates:
-        ledger_name = f"{'Purchase' if not is_sales else 'Sale'} {format_rate(rate)}%"
+        ledger_name = f"PURCHASE @{int(rate) if rate == int(rate) else rate}%"
         if ledger_name not in existing_ledgers:
             masters_xml += f"""
-        <TALLYMESSAGE xmlns:UDF="TallyUDF">
-        <LEDGER NAME="{esc(ledger_name)}" ACTION="Create">
-            <NAME.LIST><NAME>{esc(ledger_name)}</NAME></NAME.LIST>
-            <PARENT>{ledger_parent_group}</PARENT>
-            <ISGSTAPPLICABLE>Yes</ISGSTAPPLICABLE>
-            <GSTRATE>{rate}</GSTRATE>
-        </LEDGER>
-        </TALLYMESSAGE>"""
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <LEDGER NAME="{esc(ledger_name)}" ACTION="Create">
+        <NAME.LIST><NAME>{esc(ledger_name)}</NAME></NAME.LIST>
+        <PARENT>{ledger_parent_group}</PARENT>
+        <ISGSTAPPLICABLE>Yes</ISGSTAPPLICABLE>
+        <GSTRATE>{rate}</GSTRATE>
+    </LEDGER>
+    </TALLYMESSAGE>"""
+
+    # Create Tax Ledgers
+    for rate in unique_rates:
+        if rate > 0:
+            if is_inter_state:
+                # IGST at full rate
+                igst_name = f"Input IGST {format_rate(rate)}%"
+                if igst_name not in existing_ledgers:
+                    masters_xml += f"""
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <LEDGER NAME="{esc(igst_name)}" ACTION="Create">
+        <NAME.LIST><NAME>{esc(igst_name)}</NAME></NAME.LIST>
+        <PARENT>Duties &amp; Taxes</PARENT>
+        <TAXTYPE>GST</TAXTYPE>
+        <GSTDUTYHEAD>Integrated Tax</GSTDUTYHEAD>
+        <GSTRATE>{rate}</GSTRATE>
+    </LEDGER>
+    </TALLYMESSAGE>"""
+            else:
+                # CGST + SGST at half rates
+                half_rate = rate / 2
+                cgst_name = f"Input CGST@{format_rate(half_rate)}%"
+                sgst_name = f"Input SGST@{format_rate(half_rate)}%"
+                
+                for tax_name, duty_head in [(cgst_name, "Central Tax"), (sgst_name, "State Tax")]:
+                    if tax_name not in existing_ledgers:
+                        masters_xml += f"""
+    <TALLYMESSAGE xmlns:UDF="TallyUDF">
+    <LEDGER NAME="{esc(tax_name)}" ACTION="Create">
+        <NAME.LIST><NAME>{esc(tax_name)}</NAME></NAME.LIST>
+        <PARENT>Duties &amp; Taxes</PARENT>
+        <TAXTYPE>GST</TAXTYPE>
+        <GSTDUTYHEAD>{duty_head}</GSTDUTYHEAD>
+        <GSTRATE>{half_rate}</GSTRATE>
+    </LEDGER>
+    </TALLYMESSAGE>"""
 
     # create vouchers
     inventory_xml = ""
     tax_ledger_totals = {}
+    purchase_ledger_totals = {}
     total_voucher_value = 0.0
+    
     for item in line_items:
         item_gst_rate = float(getattr(item, 'gst_rate', None) or 18)
         item_qty = float(getattr(item, 'qty', None) or 1)
@@ -161,53 +189,194 @@ def generate_tally_xml(invoice: Any, line_items: Any = None, existing_ledgers: O
         item_rate = item_rate_val
         amount = round_val(qty * item_rate)
         item_name = clean_name(item_desc) or f"Item @ {rate}%"
-        ledger_name = f"{'Purchase' if not is_sales else 'Sale'} {format_rate(rate)}%"
+        
+        # Track purchase ledger totals by rate
+        rate_str = f"{int(rate) if rate == int(rate) else rate}%"
+        purchase_ledger_totals[rate_str] = purchase_ledger_totals.get(rate_str, 0) + amount
+        
         total_voucher_value += amount
         line_tax = round_val(amount * (rate / 100))
         total_voucher_value += line_tax
 
+        # Calculate tax ledger amounts
         if is_inter_state:
-            igst_name = f"{'Input' if not is_sales else 'Output'} IGST {format_rate(rate)}%"
+            igst_name = f"Input IGST {format_rate(rate)}%"
             tax_ledger_totals[igst_name] = tax_ledger_totals.get(igst_name, 0) + line_tax
         else:
             half = rate / 2
-            cgst_name = f"{'Input' if not is_sales else 'Output'} CGST {format_rate(half)}%"
-            sgst_name = f"{'Input' if not is_sales else 'Output'} SGST {format_rate(half)}%"
+            cgst_name = f"Input CGST@{format_rate(half)}%"
+            sgst_name = f"Input SGST@{format_rate(half)}%"
             half_tax = round_val(line_tax / 2)
             remainder = round_val(line_tax - half_tax)
             tax_ledger_totals[cgst_name] = tax_ledger_totals.get(cgst_name, 0) + half_tax
             tax_ledger_totals[sgst_name] = tax_ledger_totals.get(sgst_name, 0) + remainder
 
-        amount_str = f"{amount * item_sign:.2f}"
+    # Build ledger entries in correct Tally order:
+    # 1. Party Ledger (CREDIT - positive)
+    # 2. Purchase Ledgers (DEBIT - negative)
+    # 3. Tax Ledgers (DEBIT - negative)
+    
+    ledger_entries_xml = ""
+    
+    # 1. Party Ledger Entry
+    ledger_entries_xml += f"""
+      <LEDGERENTRIES.LIST>
+       <OLDAUDITENTRYIDS.LIST TYPE="Number">
+        <OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS>
+       </OLDAUDITENTRYIDS.LIST>
+       <LEDGERNAME>{esc(party_name)}</LEDGERNAME>
+       <GSTCLASS>&#4; Not Applicable</GSTCLASS>
+       <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+       <LEDGERFROMITEM>No</LEDGERFROMITEM>
+       <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>
+       <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+       <GSTOVERRIDDEN>No</GSTOVERRIDDEN>
+       <ISGSTASSESSABLEVALUEOVERRIDDEN>No</ISGSTASSESSABLEVALUEOVERRIDDEN>
+       <STRDISGSTAPPLICABLE>No</STRDISGSTAPPLICABLE>
+       <STRDGSTISPARTYLEDGER>No</STRDGSTISPARTYLEDGER>
+       <STRDGSTISDUTYLEDGER>No</STRDGSTISDUTYLEDGER>
+       <CONTENTNEGISPOS>No</CONTENTNEGISPOS>
+       <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>
+       <ISCAPVATTAXALTERED>No</ISCAPVATTAXALTERED>
+       <ISCAPVATNOTCLAIMED>No</ISCAPVATNOTCLAIMED>
+       <AMOUNT>{round_val(total_voucher_value):.2f}</AMOUNT>
+      </LEDGERENTRIES.LIST>"""
 
-        inventory_xml += f"""
-        <ALLINVENTORYENTRIES.LIST>
-          <STOCKITEMNAME>{esc(item_name)}</STOCKITEMNAME>
-          <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-          <ACTUALQTY>{qty} Nos</ACTUALQTY>
-          <BILLEDQTY>{qty} Nos</BILLEDQTY>
-          <RATE>{item_rate:.2f}/Nos</RATE>
-          <AMOUNT>{amount_str}</AMOUNT>
-          <ACCOUNTINGALLOCATIONS.LIST>
-             <LEDGERNAME>{esc(ledger_name)}</LEDGERNAME>
-             <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-             <AMOUNT>{amount_str}</AMOUNT>
-          </ACCOUNTINGALLOCATIONS.LIST>
-        </ALLINVENTORYENTRIES.LIST>"""
+    # 2. Purchase Ledgers
+    for rate_str, amount in purchase_ledger_totals.items():
+        purchase_name = f"PURCHASE @{rate_str}"
+        ledger_entries_xml += f"""
+      <LEDGERENTRIES.LIST>
+       <OLDAUDITENTRYIDS.LIST TYPE="Number">
+        <OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS>
+       </OLDAUDITENTRYIDS.LIST>
+       <LEDGERNAME>{purchase_name}</LEDGERNAME>
+       <GSTCLASS>&#4; Not Applicable</GSTCLASS>
+       <GSTOVRDNINELIGIBLEITC>&#4; Applicable</GSTOVRDNINELIGIBLEITC>
+       <GSTOVRDNISREVCHARGEAPPL>&#4; Not Applicable</GSTOVRDNISREVCHARGEAPPL>
+       <GSTOVRDNSTOREDNATURE/>
+       <GSTOVRDNTYPEOFSUPPLY>Services</GSTOVRDNTYPEOFSUPPLY>
+       <GSTRATEINFERAPPLICABILITY>As per Masters/Company</GSTRATEINFERAPPLICABILITY>
+       <GSTHSNINFERAPPLICABILITY>As per Masters/Company</GSTHSNINFERAPPLICABILITY>
+       <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+       <LEDGERFROMITEM>No</LEDGERFROMITEM>
+       <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>
+       <ISPARTYLEDGER>No</ISPARTYLEDGER>
+       <GSTOVERRIDDEN>No</GSTOVERRIDDEN>
+       <ISGSTASSESSABLEVALUEOVERRIDDEN>No</ISGSTASSESSABLEVALUEOVERRIDDEN>
+       <STRDISGSTAPPLICABLE>No</STRDISGSTAPPLICABLE>
+       <STRDGSTISPARTYLEDGER>No</STRDGSTISPARTYLEDGER>
+       <STRDGSTISDUTYLEDGER>No</STRDGSTISDUTYLEDGER>
+       <CONTENTNEGISPOS>No</CONTENTNEGISPOS>
+       <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
+       <ISCAPVATTAXALTERED>No</ISCAPVATTAXALTERED>
+       <ISCAPVATNOTCLAIMED>No</ISCAPVATNOTCLAIMED>
+       <AMOUNT>{-abs(amount):.2f}</AMOUNT>
+       <VATEXPAMOUNT>{-abs(amount):.2f}</VATEXPAMOUNT>
+       <SERVICETAXDETAILS.LIST>       </SERVICETAXDETAILS.LIST>
+       <BANKALLOCATIONS.LIST>       </BANKALLOCATIONS.LIST>
+       <BILLALLOCATIONS.LIST>       </BILLALLOCATIONS.LIST>
+       <INTERESTCOLLECTION.LIST>       </INTERESTCOLLECTION.LIST>
+       <OLDAUDITENTRIES.LIST>       </OLDAUDITENTRIES.LIST>
+       <ACCOUNTAUDITENTRIES.LIST>       </ACCOUNTAUDITENTRIES.LIST>
+       <AUDITENTRIES.LIST>       </AUDITENTRIES.LIST>
+       <INPUTCRALLOCS.LIST>       </INPUTCRALLOCS.LIST>
+       <DUTYHEADDETAILS.LIST>       </DUTYHEADDETAILS.LIST>
+       <EXCISEDUTYHEADDETAILS.LIST>       </EXCISEDUTYHEADDETAILS.LIST>
+       <RATEDETAILS.LIST>
+        <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
+       </RATEDETAILS.LIST>
+       <RATEDETAILS.LIST>
+        <GSTRATEDUTYHEAD>SGST/UTGST</GSTRATEDUTYHEAD>
+       </RATEDETAILS.LIST>
+       <RATEDETAILS.LIST>
+        <GSTRATEDUTYHEAD>IGST</GSTRATEDUTYHEAD>
+       </RATEDETAILS.LIST>
+       <RATEDETAILS.LIST>
+        <GSTRATEDUTYHEAD>Cess</GSTRATEDUTYHEAD>
+       </RATEDETAILS.LIST>
+       <RATEDETAILS.LIST>
+        <GSTRATEDUTYHEAD>State Cess</GSTRATEDUTYHEAD>
+       </RATEDETAILS.LIST>
+       <SUMMARYALLOCS.LIST>       </SUMMARYALLOCS.LIST>
+       <CENVATDUTYALLOCATIONS.LIST>       </CENVATDUTYALLOCATIONS.LIST>
+       <STPYMTDETAILS.LIST>       </STPYMTDETAILS.LIST>
+       <EXCISEPAYMENTALLOCATIONS.LIST>       </EXCISEPAYMENTALLOCATIONS.LIST>
+       <TAXBILLALLOCATIONS.LIST>       </TAXBILLALLOCATIONS.LIST>
+       <TAXOBJECTALLOCATIONS.LIST>       </TAXOBJECTALLOCATIONS.LIST>
+       <TDSEXPENSEALLOCATIONS.LIST>       </TDSEXPENSEALLOCATIONS.LIST>
+       <VATSTATUTORYDETAILS.LIST>       </VATSTATUTORYDETAILS.LIST>
+       <COSTTRACKALLOCATIONS.LIST>       </COSTTRACKALLOCATIONS.LIST>
+       <REFVOUCHERDETAILS.LIST>       </REFVOUCHERDETAILS.LIST>
+       <INVOICEWISEDETAILS.LIST>       </INVOICEWISEDETAILS.LIST>
+       <VATITCDETAILS.LIST>       </VATITCDETAILS.LIST>
+       <ADVANCETAXDETAILS.LIST>       </ADVANCETAXDETAILS.LIST>
+       <TAXTYPEALLOCATIONS.LIST>       </TAXTYPEALLOCATIONS.LIST>
+      </LEDGERENTRIES.LIST>"""
 
-    tax_ledgers_xml = ""
-    for name, raw_amt in tax_ledger_totals.items():
+    # 3. Tax Ledgers
+    for tax_name, raw_amt in tax_ledger_totals.items():
         amt = round_val(raw_amt)
         if amt > 0:
-            tax_amt_str = f"{amt:.2f}"
-            tax_ledgers_xml += f"""
-        <LEDGERENTRIES.LIST>
-          <LEDGERNAME>{esc(name)}</LEDGERNAME>
-          <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-          <AMOUNT>{tax_amt_str}</AMOUNT>
-        </LEDGERENTRIES.LIST>"""
-
-    party_amount_str = f"{round_val(total_voucher_value):.2f}"
+            tax_amt_str = f"{-abs(amt):.2f}"
+            
+            # Extract rate from ledger name
+            rate_match = re.search(r'(\d+(?:\.\d+)?)', tax_name)
+            rate_str = rate_match.group(1) if rate_match else "0"
+            
+            ledger_entries_xml += f"""
+      <LEDGERENTRIES.LIST>
+       <OLDAUDITENTRYIDS.LIST TYPE="Number">
+        <OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS>
+       </OLDAUDITENTRYIDS.LIST>
+       <RATEOFINVOICETAX.LIST TYPE="Number">
+        <RATEOFINVOICETAX> {rate_str}</RATEOFINVOICETAX>
+       </RATEOFINVOICETAX.LIST>
+       <APPROPRIATEFOR>&#4; Not Applicable</APPROPRIATEFOR>
+       <ROUNDTYPE>&#4; Not Applicable</ROUNDTYPE>
+       <LEDGERNAME>{tax_name}</LEDGERNAME>
+       <GSTCLASS>&#4; Not Applicable</GSTCLASS>
+       <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+       <LEDGERFROMITEM>No</LEDGERFROMITEM>
+       <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>
+       <ISPARTYLEDGER>No</ISPARTYLEDGER>
+       <GSTOVERRIDDEN>No</GSTOVERRIDDEN>
+       <ISGSTASSESSABLEVALUEOVERRIDDEN>No</ISGSTASSESSABLEVALUEOVERRIDDEN>
+       <STRDISGSTAPPLICABLE>No</STRDISGSTAPPLICABLE>
+       <STRDGSTISPARTYLEDGER>No</STRDGSTISPARTYLEDGER>
+       <STRDGSTISDUTYLEDGER>No</STRDGSTISDUTYLEDGER>
+       <CONTENTNEGISPOS>No</CONTENTNEGISPOS>
+       <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
+       <ISCAPVATTAXALTERED>No</ISCAPVATTAXALTERED>
+       <ISCAPVATNOTCLAIMED>No</ISCAPVATNOTCLAIMED>
+       <AMOUNT>{tax_amt_str}</AMOUNT>
+       <VATEXPAMOUNT>{tax_amt_str}</VATEXPAMOUNT>
+       <SERVICETAXDETAILS.LIST>       </SERVICETAXDETAILS.LIST>
+       <BANKALLOCATIONS.LIST>       </BANKALLOCATIONS.LIST>
+       <BILLALLOCATIONS.LIST>       </BILLALLOCATIONS.LIST>
+       <INTERESTCOLLECTION.LIST>       </INTERESTCOLLECTION.LIST>
+       <OLDAUDITENTRIES.LIST>       </OLDAUDITENTRIES.LIST>
+       <ACCOUNTAUDITENTRIES.LIST>       </ACCOUNTAUDITENTRIES.LIST>
+       <AUDITENTRIES.LIST>       </AUDITENTRIES.LIST>
+       <INPUTCRALLOCS.LIST>       </INPUTCRALLOCS.LIST>
+       <DUTYHEADDETAILS.LIST>       </DUTYHEADDETAILS.LIST>
+       <EXCISEDUTYHEADDETAILS.LIST>       </EXCISEDUTYHEADDETAILS.LIST>
+       <RATEDETAILS.LIST>       </RATEDETAILS.LIST>
+       <SUMMARYALLOCS.LIST>       </SUMMARYALLOCS.LIST>
+       <CENVATDUTYALLOCATIONS.LIST>       </CENVATDUTYALLOCATIONS.LIST>
+       <STPYMTDETAILS.LIST>       </STPYMTDETAILS.LIST>
+       <EXCISEPAYMENTALLOCATIONS.LIST>       </EXCISEPAYMENTALLOCATIONS.LIST>
+       <TAXBILLALLOCATIONS.LIST>       </TAXBILLALLOCATIONS.LIST>
+       <TAXOBJECTALLOCATIONS.LIST>       </TAXOBJECTALLOCATIONS.LIST>
+       <TDSEXPENSEALLOCATIONS.LIST>       </TDSEXPENSEALLOCATIONS.LIST>
+       <VATSTATUTORYDETAILS.LIST>       </VATSTATUTORYDETAILS.LIST>
+       <COSTTRACKALLOCATIONS.LIST>       </COSTTRACKALLOCATIONS.LIST>
+       <REFVOUCHERDETAILS.LIST>       </REFVOUCHERDETAILS.LIST>
+       <INVOICEWISEDETAILS.LIST>       </INVOICEWISEDETAILS.LIST>
+       <VATITCDETAILS.LIST>       </VATITCDETAILS.LIST>
+       <ADVANCETAXDETAILS.LIST>       </ADVANCETAXDETAILS.LIST>
+       <TAXTYPEALLOCATIONS.LIST>       </TAXTYPEALLOCATIONS.LIST>
+      </LEDGERENTRIES.LIST>"""
 
     return f"""
 <ENVELOPE>
@@ -237,26 +406,84 @@ def generate_tally_xml(invoice: Any, line_items: Any = None, existing_ledgers: O
       <REQUESTDATA>
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
           <VOUCHER REMOTEID="{esc(remote_id)}" VCHKEY="{esc(vch_key)}" VCHTYPE="Purchase" ACTION="Create" OBJVIEW="Invoice Voucher View">
-            <DATE>{esc(format_date_for_xml(invoice_date))}</DATE>
+            <BASICBUYERADDRESS.LIST TYPE="String">
+             <BASICBUYERADDRESS>Maharashtra</BASICBUYERADDRESS>
+            </BASICBUYERADDRESS.LIST>
+            <OLDAUDITENTRYIDS.LIST TYPE="Number">
+             <OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS>
+            </OLDAUDITENTRYIDS.LIST>
+            <DATE>{date_xml}</DATE>
+            <REFERENCEDATE>{date_xml}</REFERENCEDATE>
+            <VCHSTATUSDATE>{date_xml}</VCHSTATUSDATE>
             <GUID>{esc(guid)}</GUID>
+            <GSTREGISTRATIONTYPE>Regular</GSTREGISTRATIONTYPE>
+            <VATDEALERTYPE>Regular</VATDEALERTYPE>
+            <STATENAME>Maharashtra</STATENAME>
+            <NARRATION>Being as per Invoice</NARRATION>
+            <OBJECTUPDATEACTION>Create</OBJECTUPDATEACTION>
+            <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>
+            {f'<PARTYGSTIN>{esc(party_gstin)}</PARTYGSTIN>' if party_gstin else ''}
+            <PLACEOFSUPPLY>Maharashtra</PLACEOFSUPPLY>
+            <VOUCHERTYPENAME>Purchase</VOUCHERTYPENAME>
+            <PARTYNAME>{esc(party_name)}</PARTYNAME>
             <PARTYLEDGERNAME>{esc(party_name)}</PARTYLEDGERNAME>
             <VOUCHERNUMBER>{esc(invoice_number)}</VOUCHERNUMBER>
-            <REFERENCE>{esc(invoice_number)}</REFERENCE>
             <BASICBUYERNAME>{esc(buyer_name_str)}</BASICBUYERNAME>
-            <ISINVOICE>Yes</ISINVOICE>
-
-            <LEDGERENTRIES.LIST>
-              <LEDGERNAME>{esc(party_name)}</LEDGERNAME>
-              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-              <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
-              <AMOUNT>{esc(party_amount_str)}</AMOUNT>
-            </LEDGERENTRIES.LIST>
-
-            {inventory_xml}
-
-            {tax_ledgers_xml}
-
+            <REFERENCE>{esc(invoice_number)}</REFERENCE>
+            <PARTYMAILINGNAME>{esc(party_name)}</PARTYMAILINGNAME>
+            <NUMBERINGSTYLE>Manual</NUMBERINGSTYLE>
+            <CSTFORMISSUETYPE>&#4; Not Applicable</CSTFORMISSUETYPE>
+            <CSTFORMRECVTYPE>&#4; Not Applicable</CSTFORMRECVTYPE>
+            <FBTPAYMENTTYPE>Default</FBTPAYMENTTYPE>
+            <PERSISTEDVIEW>Invoice Voucher View</PERSISTEDVIEW>
+            <VCHSTATUSTAXADJUSTMENT>Default</VCHSTATUSTAXADJUSTMENT>
+            <VCHSTATUSVOUCHERTYPE>Purchase</VCHSTATUSVOUCHERTYPE>
+            <DIFFACTUALQTY>No</DIFFACTUALQTY>
+            <ISMSTFROMSYNC>No</ISMSTFROMSYNC>
+            <ISDELETED>No</ISDELETED>
+            <ISOPTIONAL>No</ISOPTIONAL>
+            <EFFECTIVEDATE>{date_xml}</EFFECTIVEDATE>
+            <ISELIGIBLEFORITC>Yes</ISELIGIBLEFORITC>
+            <EWAYBILLDETAILS.LIST>      </EWAYBILLDETAILS.LIST>
+            <EXCLUDEDTAXATIONS.LIST>      </EXCLUDEDTAXATIONS.LIST>
+            <OLDAUDITENTRIES.LIST>      </OLDAUDITENTRIES.LIST>
+            <ACCOUNTAUDITENTRIES.LIST>      </ACCOUNTAUDITENTRIES.LIST>
+            <AUDITENTRIES.LIST>      </AUDITENTRIES.LIST>
+            <DUTYHEADDETAILS.LIST>      </DUTYHEADDETAILS.LIST>
+            <GSTADVADJDETAILS.LIST>      </GSTADVADJDETAILS.LIST>
+            <ALLINVENTORYENTRIES.LIST>      </ALLINVENTORYENTRIES.LIST>
+            <CONTRITRANS.LIST>      </CONTRITRANS.LIST>
+            <EWAYBILLERRORLIST.LIST>      </EWAYBILLERRORLIST.LIST>
+            <IRNERRORLIST.LIST>      </IRNERRORLIST.LIST>
+            <HARYANAVAT.LIST>      </HARYANAVAT.LIST>
+            <SUPPLEMENTARYDUTYHEADDETAILS.LIST>      </SUPPLEMENTARYDUTYHEADDETAILS.LIST>
+            <INVOICEDELNOTES.LIST>      </INVOICEDELNOTES.LIST>
+            <INVOICEORDERLIST.LIST>      </INVOICEORDERLIST.LIST>
+            <INVOICEINDENTLIST.LIST>      </INVOICEINDENTLIST.LIST>
+            <ATTENDANCEENTRIES.LIST>      </ATTENDANCEENTRIES.LIST>
+            <ORIGINVOICEDETAILS.LIST>      </ORIGINVOICEDETAILS.LIST>
+            <INVOICEEXPORTLIST.LIST>      </INVOICEEXPORTLIST.LIST>
+            {ledger_entries_xml}
+            <GST.LIST>      </GST.LIST>
+            <STKJRNLADDLCOSTDETAILS.LIST>      </STKJRNLADDLCOSTDETAILS.LIST>
+            <PAYROLLMODEOFPAYMENT.LIST>      </PAYROLLMODEOFPAYMENT.LIST>
+            <ATTDRECORDS.LIST>      </ATTDRECORDS.LIST>
+            <GSTEWAYCONSIGNORADDRESS.LIST>      </GSTEWAYCONSIGNORADDRESS.LIST>
+            <GSTEWAYCONSIGNEEADDRESS.LIST>      </GSTEWAYCONSIGNEEADDRESS.LIST>
+            <TEMPGSTRATEDETAILS.LIST>      </TEMPGSTRATEDETAILS.LIST>
+            <TEMPGSTADVADJUSTED.LIST>      </TEMPGSTADVADJUSTED.LIST>
+            <GSTBUYERADDRESS.LIST>      </GSTBUYERADDRESS.LIST>
+            <GSTCONSIGNEEADDRESS.LIST>      </GSTCONSIGNEEADDRESS.LIST>
           </VOUCHER>
+        </TALLYMESSAGE>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+         <COMPANY>
+          <REMOTECMPINFO.LIST MERGE="Yes">
+           <NAME>{esc(remote_id)}</NAME>
+           <REMOTECMPNAME>##SVCurrentCompany</REMOTECMPNAME>
+           <REMOTECMPSTATE>Maharashtra</REMOTECMPSTATE>
+          </REMOTECMPINFO.LIST>
+         </COMPANY>
         </TALLYMESSAGE>
       </REQUESTDATA>
     </IMPORTDATA>

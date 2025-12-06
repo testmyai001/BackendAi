@@ -1,0 +1,269 @@
+# Tally XML Generator - Before & After Comparison
+
+## Sample Input Data
+
+```python
+{
+    "id": "v1",
+    "date": "2025-08-02",
+    "invoiceNo": "DF-1435/25-26",
+    "partyName": "DIPURAJ FOODS",
+    "gstin": "27ABGPY9844H1ZV",  # Same state (27)
+    "voucherType": "Purchase",
+    "items": [
+        {"amount": 8337.00, "taxRate": 12},
+        {"amount": 4820.32, "taxRate": 18}
+    ],
+    "totalAmount": 15025.42
+}
+```
+
+---
+
+## BEFORE (Broken)
+
+### Issues:
+1. ❌ Party ledger had incorrect structure
+2. ❌ Purchase ledger not properly separated
+3. ❌ Tax ledgers under wrong group (Expenses instead of Duties & Taxes)
+4. ❌ Tax rates always 50/50 split (not matching actual rates)
+5. ❌ Amount signs inconsistent
+6. ❌ Ledger entry order incorrect
+7. ❌ `is_inter_state` hardcoded to False
+8. ❌ XML used ALLLEDGERENTRIES.LIST instead of LEDGERENTRIES.LIST
+
+### Sample Output (Incorrect):
+```xml
+<ALLLEDGERENTRIES.LIST>
+  <LEDGERNAME>DIPURAJ FOODS</LEDGERNAME>
+  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+  <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+  <AMOUNT>15025.42</AMOUNT>
+</ALLLEDGERENTRIES.LIST>
+
+<ALLLEDGERENTRIES.LIST>
+  <LEDGERNAME>Purchase 12%</LEDGERNAME>  <!-- WRONG NAME -->
+  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>  <!-- SHOULD BE Yes -->
+  <AMOUNT>8337.00</AMOUNT>  <!-- SHOULD BE NEGATIVE -->
+</ALLLEDGERENTRIES.LIST>
+
+<!-- Tax ledgers with wrong rates (50/50 always) -->
+<ALLLEDGERENTRIES.LIST>
+  <LEDGERNAME>Input CGST 6%</LEDGERNAME>  <!-- 50/50 split -->
+  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>  <!-- SHOULD BE Yes -->
+  <AMOUNT>500.22</AMOUNT>  <!-- SHOULD BE NEGATIVE -->
+</ALLLEDGERENTRIES.LIST>
+```
+
+---
+
+## AFTER (Fixed)
+
+### Fixes Applied:
+1. ✅ Party ledger: ISDEEMEDPOSITIVE=No, ISPARTYLEDGER=Yes, AMOUNT=positive
+2. ✅ Purchase ledger: ISDEEMEDPOSITIVE=Yes, ISPARTYLEDGER=No, AMOUNT=negative
+3. ✅ Tax ledgers: Created under "Duties & Taxes" group
+4. ✅ Tax rates: Proper split (CGST@6%, SGST@6% for 12%)
+5. ✅ Amount signs: Consistent (debit=-negative, credit=positive)
+6. ✅ Ledger order: Party → Purchase → Taxes
+7. ✅ is_inter_state: Detects from GSTIN[0:2] == "27"
+8. ✅ XML tags: Proper LEDGERENTRIES.LIST structure
+
+### Sample Output (Correct):
+```xml
+<LEDGERENTRIES.LIST>
+  <OLDAUDITENTRYIDS.LIST TYPE="Number">
+    <OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS>
+  </OLDAUDITENTRYIDS.LIST>
+  <LEDGERNAME>DIPURAJ FOODS</LEDGERNAME>
+  <GSTCLASS>&#4; Not Applicable</GSTCLASS>
+  <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>  <!-- ✅ CORRECT -->
+  <LEDGERFROMITEM>No</LEDGERFROMITEM>
+  <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>
+  <ISPARTYLEDGER>Yes</ISPARTYLEDGER>  <!-- ✅ CORRECT -->
+  <GSTOVERRIDDEN>No</GSTOVERRIDDEN>
+  <ISGSTASSESSABLEVALUEOVERRIDDEN>No</ISGSTASSESSABLEVALUEOVERRIDDEN>
+  <STRDISGSTAPPLICABLE>No</STRDISGSTAPPLICABLE>
+  <STRDGSTISPARTYLEDGER>No</STRDGSTISPARTYLEDGER>
+  <STRDGSTISDUTYLEDGER>No</STRDGSTISDUTYLEDGER>
+  <CONTENTNEGISPOS>No</CONTENTNEGISPOS>
+  <ISLASTDEEMEDPOSITIVE>No</ISLASTDEEMEDPOSITIVE>
+  <ISCAPVATTAXALTERED>No</ISCAPVATTAXALTERED>
+  <ISCAPVATNOTCLAIMED>No</ISCAPVATNOTCLAIMED>
+  <AMOUNT>15025.42</AMOUNT>  <!-- ✅ POSITIVE -->
+</LEDGERENTRIES.LIST>
+
+<LEDGERENTRIES.LIST>
+  <OLDAUDITENTRYIDS.LIST TYPE="Number">
+    <OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS>
+  </OLDAUDITENTRYIDS.LIST>
+  <LEDGERNAME>PURCHASE @12%</LEDGERNAME>  <!-- ✅ CORRECT NAME -->
+  <GSTCLASS>&#4; Not Applicable</GSTCLASS>
+  <GSTOVRDNINELIGIBLEITC>&#4; Applicable</GSTOVRDNINELIGIBLEITC>
+  <GSTOVRDNISREVCHARGEAPPL>&#4; Not Applicable</GSTOVRDNISREVCHARGEAPPL>
+  <GSTOVRDNSTOREDNATURE/>
+  <GSTOVRDNTYPEOFSUPPLY>Services</GSTOVRDNTYPEOFSUPPLY>
+  <GSTRATEINFERAPPLICABILITY>As per Masters/Company</GSTRATEINFERAPPLICABILITY>
+  <GSTHSNINFERAPPLICABILITY>As per Masters/Company</GSTHSNINFERAPPLICABILITY>
+  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>  <!-- ✅ CORRECT -->
+  <LEDGERFROMITEM>No</LEDGERFROMITEM>
+  <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>
+  <ISPARTYLEDGER>No</ISPARTYLEDGER>  <!-- ✅ CORRECT -->
+  <GSTOVERRIDDEN>No</GSTOVERRIDDEN>
+  <ISGSTASSESSABLEVALUEOVERRIDDEN>No</ISGSTASSESSABLEVALUEOVERRIDDEN>
+  <STRDISGSTAPPLICABLE>No</STRDISGSTAPPLICABLE>
+  <STRDGSTISPARTYLEDGER>No</STRDGSTISPARTYLEDGER>
+  <STRDGSTISDUTYLEDGER>No</STRDGSTISDUTYLEDGER>
+  <CONTENTNEGISPOS>No</CONTENTNEGISPOS>
+  <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
+  <ISCAPVATTAXALTERED>No</ISCAPVATTAXALTERED>
+  <ISCAPVATNOTCLAIMED>No</ISCAPVATNOTCLAIMED>
+  <AMOUNT>-8337.00</AMOUNT>  <!-- ✅ NEGATIVE -->
+  <VATEXPAMOUNT>-8337.00</VATEXPAMOUNT>
+  <!-- ... all other required tags ... -->
+  <RATEDETAILS.LIST>
+    <GSTRATEDUTYHEAD>CGST</GSTRATEDUTYHEAD>
+  </RATEDETAILS.LIST>
+  <RATEDETAILS.LIST>
+    <GSTRATEDUTYHEAD>SGST/UTGST</GSTRATEDUTYHEAD>
+  </RATEDETAILS.LIST>
+  <!-- ... etc ... -->
+</LEDGERENTRIES.LIST>
+
+<!-- 12% GST: CGST@6% (half rate) -->
+<LEDGERENTRIES.LIST>
+  <OLDAUDITENTRYIDS.LIST TYPE="Number">
+    <OLDAUDITENTRYIDS>-1</OLDAUDITENTRYIDS>
+  </OLDAUDITENTRYIDS.LIST>
+  <RATEOFINVOICETAX.LIST TYPE="Number">
+    <RATEOFINVOICETAX> 6</RATEOFINVOICETAX>  <!-- ✅ HALF RATE -->
+  </RATEOFINVOICETAX.LIST>
+  <APPROPRIATEFOR>&#4; Not Applicable</APPROPRIATEFOR>
+  <ROUNDTYPE>&#4; Not Applicable</ROUNDTYPE>
+  <LEDGERNAME>INPUT CGST@6%</LEDGERNAME>  <!-- ✅ CORRECT NAMING -->
+  <GSTCLASS>&#4; Not Applicable</GSTCLASS>
+  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>  <!-- ✅ CORRECT -->
+  <LEDGERFROMITEM>No</LEDGERFROMITEM>
+  <REMOVEZEROENTRIES>No</REMOVEZEROENTRIES>
+  <ISPARTYLEDGER>No</ISPARTYLEDGER>  <!-- ✅ CORRECT -->
+  <GSTOVERRIDDEN>No</GSTOVERRIDDEN>
+  <ISGSTASSESSABLEVALUEOVERRIDDEN>No</ISGSTASSESSABLEVALUEOVERRIDDEN>
+  <STRDISGSTAPPLICABLE>No</STRDISGSTAPPLICABLE>
+  <STRDGSTISPARTYLEDGER>No</STRDGSTISPARTYLEDGER>
+  <STRDGSTISDUTYLEDGER>No</STRDGSTISDUTYLEDGER>
+  <CONTENTNEGISPOS>No</CONTENTNEGISPOS>
+  <ISLASTDEEMEDPOSITIVE>Yes</ISLASTDEEMEDPOSITIVE>
+  <ISCAPVATTAXALTERED>No</ISCAPVATTAXALTERED>
+  <ISCAPVATNOTCLAIMED>No</ISCAPVATNOTCLAIMED>
+  <AMOUNT>-500.22</AMOUNT>  <!-- ✅ NEGATIVE -->
+  <VATEXPAMOUNT>-500.22</VATEXPAMOUNT>
+  <!-- ... all other required tags ... -->
+</LEDGERENTRIES.LIST>
+
+<!-- 12% GST: SGST@6% (half rate) -->
+<LEDGERENTRIES.LIST>
+  <RATEOFINVOICETAX.LIST TYPE="Number">
+    <RATEOFINVOICETAX> 6</RATEOFINVOICETAX>  <!-- ✅ HALF RATE -->
+  </RATEOFINVOICETAX.LIST>
+  <LEDGERNAME>INPUT SGST@6%</LEDGERNAME>  <!-- ✅ CORRECT NAMING -->
+  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>  <!-- ✅ CORRECT -->
+  <ISPARTYLEDGER>No</ISPARTYLEDGER>  <!-- ✅ CORRECT -->
+  <AMOUNT>-500.22</AMOUNT>  <!-- ✅ NEGATIVE -->
+  <!-- ... all other required tags ... -->
+</LEDGERENTRIES.LIST>
+
+<!-- 18% GST: CGST@9% (half rate) -->
+<LEDGERENTRIES.LIST>
+  <RATEOFINVOICETAX.LIST TYPE="Number">
+    <RATEOFINVOICETAX> 9</RATEOFINVOICETAX>  <!-- ✅ HALF RATE -->
+  </RATEOFINVOICETAX.LIST>
+  <LEDGERNAME>INPUT CGST@9%</LEDGERNAME>  <!-- ✅ CORRECT NAMING -->
+  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+  <ISPARTYLEDGER>No</ISPARTYLEDGER>
+  <AMOUNT>-433.83</AMOUNT>  <!-- ✅ NEGATIVE -->
+  <!-- ... all other required tags ... -->
+</LEDGERENTRIES.LIST>
+
+<!-- 18% GST: SGST@9% (half rate) -->
+<LEDGERENTRIES.LIST>
+  <RATEOFINVOICETAX.LIST TYPE="Number">
+    <RATEOFINVOICETAX> 9</RATEOFINVOICETAX>  <!-- ✅ HALF RATE -->
+  </RATEOFINVOICETAX.LIST>
+  <LEDGERNAME>INPUT SGST@9%</LEDGERNAME>  <!-- ✅ CORRECT NAMING -->
+  <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+  <ISPARTYLEDGER>No</ISPARTYLEDGER>
+  <AMOUNT>-433.83</AMOUNT>  <!-- ✅ NEGATIVE -->
+  <!-- ... all other required tags ... -->
+</LEDGERENTRIES.LIST>
+```
+
+---
+
+## Tax Calculation Examples
+
+### Example 1: 12% GST (Intra-state)
+- **Purchase amount:** 8337.00
+- **GST rate:** 12%
+- **GST amount:** 8337.00 × 12% = 1000.44
+- **CGST (6%):** 1000.44 / 2 = 500.22
+- **SGST (6%):** 1000.44 - 500.22 = 500.22
+- **Ledgers created:**
+  - PURCHASE @12%: -8337.00 (debit)
+  - INPUT CGST@6%: -500.22 (debit)
+  - INPUT SGST@6%: -500.22 (debit)
+
+### Example 2: 18% GST (Intra-state)
+- **Purchase amount:** 4820.32
+- **GST rate:** 18%
+- **GST amount:** 4820.32 × 18% = 867.66
+- **CGST (9%):** 867.66 / 2 = 433.83
+- **SGST (9%):** 867.66 - 433.83 = 433.83
+- **Ledgers created:**
+  - PURCHASE @18%: -4820.32 (debit)
+  - INPUT CGST@9%: -433.83 (debit)
+  - INPUT SGST@9%: -433.83 (debit)
+
+### Example 3: 18% GST (Inter-state, GSTIN code 24 = Gujarat)
+- **Purchase amount:** 5000.00
+- **GST rate:** 18%
+- **GST amount:** 5000.00 × 18% = 900.00
+- **IGST (18%):** 900.00
+- **Ledgers created:**
+  - PURCHASE @18%: -5000.00 (debit)
+  - Input IGST 18%: -900.00 (debit)
+
+---
+
+## Master Ledger Creation
+
+### BEFORE (Wrong)
+```xml
+<!-- Tax ledgers placed under EXPENSES group -->
+<PARENT>Expenses</PARENT>  <!-- ❌ WRONG -->
+```
+
+### AFTER (Correct)
+```xml
+<!-- Tax ledgers placed under DUTIES & TAXES group -->
+<PARENT>Duties &amp; Taxes</PARENT>  <!-- ✅ CORRECT -->
+```
+
+---
+
+## Summary
+
+| Aspect | Before | After |
+|--------|--------|-------|
+| Party Ledger ISDEEMEDPOSITIVE | Yes (❌) | No (✅) |
+| Party Ledger AMOUNT | Any sign (❌) | Always positive (✅) |
+| Purchase Ledger Name | "Purchase 12%" (❌) | "PURCHASE @12%" (✅) |
+| Purchase ISDEEMEDPOSITIVE | No (❌) | Yes (✅) |
+| Purchase AMOUNT | Positive (❌) | Always negative (✅) |
+| Tax Ledger Name | "Input CGST 6%" (❌) | "Input CGST@6%" (✅) |
+| Tax Ledger Rate | Always 50/50 (❌) | Actual half-rate (✅) |
+| Tax ISDEEMEDPOSITIVE | No (❌) | Yes (✅) |
+| Tax AMOUNT | Positive (❌) | Always negative (✅) |
+| Tax Ledger Group | Expenses (❌) | Duties & Taxes (✅) |
+| is_inter_state Logic | Hardcoded False (❌) | GSTIN-based detection (✅) |
+
+All issues have been resolved! ✅

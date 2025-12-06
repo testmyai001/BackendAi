@@ -105,6 +105,9 @@ export interface ExcelVoucherItem {
   amount: number;
   taxRate: number;
   ledgerName?: string;
+  itemName?: string;
+  quantity?: number;
+  rate?: number;
 }
 
 export interface ExcelVoucher {

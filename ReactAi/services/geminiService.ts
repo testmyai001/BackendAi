@@ -1,5 +1,4 @@
-
-import { GoogleGenAI, Type, Chat } from "@google/genai";
+﻿import { GoogleGenAI, Type } from "@google/genai";
 import { InvoiceData, BankTransaction } from "../types";
 import { v4 as uuidv4 } from 'uuid';
 
@@ -9,6 +8,15 @@ declare global {
     PDFLib: any;
   }
 }
+
+export type ChatSession = any;
+
+export const getAISettings = () => {
+  return {
+    apiKey: process.env.API_KEY || '',
+    model: 'gemini-2.5-flash'
+  };
+};
 
 const SYSTEM_INSTRUCTION = `
 You are an expert Indian GST Invoice Accountant.
@@ -66,11 +74,7 @@ RULES FOR TRANSACTIONS:
 4. NUMBERS: Ensure withdrawal and deposit are numbers. If a row has both, split or prioritize the non-zero.
 `;
 
-// --- PDF UNLOCKING HELPERS ---
-
 const extractPassword = (filename: string): string | null => {
-  // Extract password located between "Password-" and ".pdf" at the end of the filename
-  // Example: bank_statement_Password-NARS870580941.pdf -> NARS870580941
   const match = filename.match(/Password-(.+?)\.pdf$/i);
   if (match && match[1]) {
     return match[1].trim();
@@ -81,7 +85,6 @@ const extractPassword = (filename: string): string | null => {
 const getPdfBase64 = async (file: File): Promise<string> => {
   const password = extractPassword(file.name);
   
-  // Only attempt unlocking if we found a password in the filename and it is a PDF
   if (password && file.type === 'application/pdf') {
     if (!window.PDFLib) {
       console.warn("PDFLib not loaded, skipping password handling. Please check internet connection.");
@@ -91,36 +94,23 @@ const getPdfBase64 = async (file: File): Promise<string> => {
     try {
       console.log(`Unlocking PDF: ${file.name} using password from filename.`);
       const arrayBuffer = await file.arrayBuffer();
-      
-      // Load the PDF with the password. This "unlocks" it.
-      // pdf-lib handles the decryption internally using the provided password.
       const pdfDoc = await window.PDFLib.PDFDocument.load(arrayBuffer, { password: password });
-      
-      // Save the unlocked PDF as base64 to send to Gemini
-      // This creates a new, unencrypted version of the file in memory
       const base64 = await pdfDoc.saveAsBase64();
       return base64;
     } catch (e) {
       console.error("Failed to unlock PDF. The password in the filename might be incorrect.", e);
-      // Fallback: Send original file (Gemini might fail if it's encrypted, but we try)
       return fileToBase64(file);
     }
   }
 
-  // Standard processing for non-password protected files
   return fileToBase64(file);
 };
 
-// --- MAIN FUNCTIONS ---
-
-export const parseInvoiceWithGemini = async (
-  file: File
-): Promise<InvoiceData> => {
-  const apiKey = process.env.API_KEY;
-  if (!apiKey) throw new Error("API Key is missing");
+export const parseInvoiceWithGemini = async (file: File): Promise<InvoiceData> => {
+  const apiKey = process.env.API_KEY || process.env.REACT_APP_API_KEY;
+  if (!apiKey) throw new Error("API Key is missing. Please set API_KEY or REACT_APP_API_KEY environment variable.");
 
   const ai = new GoogleGenAI({ apiKey });
-  
   const base64Data = await getPdfBase64(file);
 
   const response = await ai.models.generateContent({
@@ -168,21 +158,18 @@ export const parseInvoiceWithGemini = async (
 
   const data = JSON.parse(text);
   
-  // INVALID CHECK
   if (data.documentType === 'INVALID') {
-      throw new Error("Invalid File");
+    throw new Error("Invalid File");
   }
 
-  // If it's a Bank Statement, we don't process further as Invoice
   if (data.documentType === 'BANK_STATEMENT') {
-      return {
-        documentType: 'BANK_STATEMENT',
-        supplierName: '', supplierGstin: '', buyerName: '', buyerGstin: '',
-        invoiceNumber: '', invoiceDate: '', voucherType: 'Purchase', targetCompany: '', lineItems: []
-      };
+    return {
+      documentType: 'BANK_STATEMENT',
+      supplierName: '', supplierGstin: '', buyerName: '', buyerGstin: '',
+      invoiceNumber: '', invoiceDate: '', voucherType: 'Purchase', targetCompany: '', lineItems: []
+    };
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lineItems = (data.lineItems || []).map((item: any) => ({
     ...item,
     id: uuidv4(),
@@ -193,13 +180,13 @@ export const parseInvoiceWithGemini = async (
   let dateDisplay = data.invoiceDate || new Date().toLocaleDateString('en-GB').replace(/\//g, '-');
   
   if (/^\d{4}-\d{2}-\d{2}$/.test(dateDisplay)) {
-      const [y, m, d] = dateDisplay.split('-');
-      dateDisplay = `${d}-${m}-${y}`;
+    const [y, m, d] = dateDisplay.split('-');
+    dateDisplay = `${d}-${m}-${y}`;
   }
 
   return {
     documentType: 'INVOICE',
-    supplierName: data.supplierName || "", // Empty is valid
+    supplierName: data.supplierName || "",
     supplierGstin: data.supplierGstin || "",
     buyerName: data.buyerName || "",
     buyerGstin: data.buyerGstin || "",
@@ -207,20 +194,19 @@ export const parseInvoiceWithGemini = async (
     invoiceDate: dateDisplay, 
     voucherType: "Purchase",
     targetCompany: "",
-    lineItems
+    lineItems: lineItems
   };
 };
 
 export const parseBankStatementWithGemini = async (file: File): Promise<{
-    documentType: 'INVOICE' | 'BANK_STATEMENT'; 
-    bankName: string; 
-    transactions: BankTransaction[]
+  documentType: 'INVOICE' | 'BANK_STATEMENT'; 
+  bankName: string; 
+  transactions: BankTransaction[]
 }> => {
-  const apiKey = process.env.API_KEY;
+  const apiKey = process.env.API_KEY || process.env.REACT_APP_API_KEY;
   if (!apiKey) throw new Error("API Key is missing");
 
   const ai = new GoogleGenAI({ apiKey });
-  
   const base64Data = await getPdfBase64(file);
 
   const response = await ai.models.generateContent({
@@ -263,14 +249,9 @@ export const parseBankStatementWithGemini = async (file: File): Promise<{
   const rawData = JSON.parse(text);
 
   if (rawData.documentType === 'INVOICE') {
-      return {
-          documentType: 'INVOICE',
-          bankName: '',
-          transactions: []
-      };
+    return { documentType: 'INVOICE', bankName: '', transactions: [] };
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const transactions = (rawData.transactions || []).map((item: any) => ({
     id: uuidv4(),
     date: item.date,
@@ -288,32 +269,28 @@ export const parseBankStatementWithGemini = async (file: File): Promise<{
   };
 };
 
-export const createChatSession = (): Chat => {
-  const apiKey = process.env.API_KEY;
+export const createChatSession = () => {
+  const apiKey = process.env.API_KEY || process.env.REACT_APP_API_KEY;
   if (!apiKey) throw new Error("API Key is missing");
   
   const ai = new GoogleGenAI({ apiKey });
   return ai.chats.create({
-    model: 'gemini-3-pro-preview',
+    model: 'gemini-2.5-flash',
     config: {
       systemInstruction: 'You are AutoTally Assistant, an expert in Tally Prime, GST compliance, and accounting automation. Help the user with their queries.',
     },
   });
 };
 
-export const analyzeImageWithGemini = async (
-  file: File,
-  prompt: string
-): Promise<string> => {
-  const apiKey = process.env.API_KEY;
+export const analyzeImageWithGemini = async (file: File, prompt: string): Promise<string> => {
+  const apiKey = process.env.API_KEY || process.env.REACT_APP_API_KEY;
   if (!apiKey) throw new Error("API Key is missing");
 
   const ai = new GoogleGenAI({ apiKey });
-  
   const base64Data = await getPdfBase64(file);
 
   const response = await ai.models.generateContent({
-    model: 'gemini-3-pro-preview',
+    model: 'gemini-2.5-flash',
     contents: {
       parts: [
         { inlineData: { mimeType: file.type, data: base64Data } },
@@ -325,7 +302,6 @@ export const analyzeImageWithGemini = async (
   return response.text || "No analysis returned.";
 };
 
-// Helper
 const fileToBase64 = (file: File): Promise<string> => {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();

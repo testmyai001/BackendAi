@@ -20,23 +20,32 @@ const ChatBot: React.FC = () => {
   ]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
-  const messagesEndRef = useRef<HTMLDivElement>(null);
 
+  // ⬇⬇ SCROLL REF (same as BankStatementManager)
+  const pageContainerRef = useRef<HTMLDivElement>(null);
+
+  // ⬇⬇ AUTO SCROLL FUNCTION (SMOOTH)
   const scrollToBottom = () => {
-    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+    if (pageContainerRef.current) {
+      pageContainerRef.current.scrollTo({
+        top: pageContainerRef.current.scrollHeight,
+        behavior: "smooth"
+      });
+    }
   };
 
+  // ⬇⬇ TRIGGER AUTO-SCROLL WHEN MESSAGES CHANGE OR LOADING STATE UPDATES
   useEffect(() => {
     scrollToBottom();
-  }, [messages]);
+  }, [messages, isLoading]);
 
   const handleSend = async () => {
     if (!input.trim()) return;
-    
+
     setIsLoading(true);
     const userMessage = input;
-    
-    // Add user message to UI immediately
+
+    // Add user message instantly
     const userMsg: Message = {
       id: String(messages.length + 1),
       role: 'user',
@@ -47,28 +56,27 @@ const ChatBot: React.FC = () => {
     setInput('');
 
     try {
-        // Create a new session for each message
-        const session = createChatSession();
-        const response = await session.sendMessage({ message: userMessage });
-        
-        const aiMsg: Message = {
-          id: String(messages.length + 2),
-          role: 'model',
-          text: response.text,
-          timestamp: new Date()
-        };
-        setMessages(prev => [...prev, aiMsg]);
+      const session = createChatSession();
+      const response = await session.sendMessage({ message: userMessage });
+
+      const aiMsg: Message = {
+        id: String(messages.length + 2),
+        role: 'model',
+        text: response.text,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, aiMsg]);
     } catch (error) {
-        console.error('Chat error:', error);
-        const errorMsg: Message = {
-          id: String(messages.length + 2),
-          role: 'model',
-          text: `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`,
-          timestamp: new Date()
-        };
-        setMessages(prev => [...prev, errorMsg]);
+      console.error('Chat error:', error);
+      const errorMsg: Message = {
+        id: String(messages.length + 2),
+        role: 'model',
+        text: `Error: ${error instanceof Error ? error.message : 'Failed to get response'}`,
+        timestamp: new Date()
+      };
+      setMessages(prev => [...prev, errorMsg]);
     } finally {
-        setIsLoading(false);
+      setIsLoading(false);
     }
   };
 
@@ -80,61 +88,75 @@ const ChatBot: React.FC = () => {
   };
 
   const resetChat = () => {
-      setMessages([{
+    setMessages([
+      {
         id: Date.now().toString(),
         role: 'model',
         text: 'Chat history cleared. How can I help you now?',
         timestamp: new Date()
-      }]);
+      }
+    ]);
   };
 
   return (
-    <div className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 h-full flex flex-col overflow-hidden animate-fade-in transition-colors">
+    <div
+      ref={pageContainerRef}
+      className="bg-white dark:bg-slate-800 rounded-xl shadow-sm border border-slate-200 dark:border-slate-700 h-full w-full flex flex-col overflow-auto animate-fade-in transition-colors"
+    >
       {/* Header */}
-      <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-between items-center">
+      <div className="p-4 border-b border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-900/50 flex justify-between items-center flex-shrink-0">
         <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
           <Bot className="w-5 h-5 text-indigo-500" />
           AutoTally Assistant
         </h3>
         <button 
-            onClick={resetChat}
-            className="text-slate-400 hover:text-red-500 transition-colors p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700" 
-            title="Clear Chat"
+          onClick={resetChat}
+          className="text-slate-400 hover:text-red-500 transition-colors p-2 rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700"
+          title="Clear Chat"
         >
-            <Eraser className="w-4 h-4" />
+          <Eraser className="w-4 h-4" />
         </button>
       </div>
 
       {/* Messages */}
-      <div className="flex-1 overflow-y-auto p-4 space-y-4 bg-slate-50/50 dark:bg-slate-900/30">
+      <div className="flex-1 overflow-y-auto overflow-x-hidden p-4 space-y-4 bg-slate-50/50 dark:bg-slate-900/30 min-h-0">
         {messages.map((msg) => (
           <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : 'justify-start'}`}>
-            <div className={`
-              max-w-[80%] rounded-2xl px-4 py-3 text-sm shadow-sm
-              ${msg.role === 'user' 
-                ? 'bg-indigo-600 text-white rounded-br-none' 
-                : 'bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-bl-none border border-slate-200 dark:border-slate-600'}
-            `}>
+            <div
+              className={`
+                max-w-[80%] rounded-2xl px-4 py-3 text-sm shadow-sm
+                ${
+                  msg.role === 'user'
+                    ? 'bg-indigo-600 text-white rounded-br-none'
+                    : 'bg-white dark:bg-slate-700 text-slate-800 dark:text-slate-100 rounded-bl-none border border-slate-200 dark:border-slate-600'
+                }
+              `}
+            >
               <div className="whitespace-pre-wrap leading-relaxed">{msg.text}</div>
-              <div className={`text-[10px] mt-1 opacity-70 ${msg.role === 'user' ? 'text-indigo-200' : 'text-slate-400'}`}>
+              <div
+                className={`
+                  text-[10px] mt-1 opacity-70
+                  ${msg.role === 'user' ? 'text-indigo-200' : 'text-slate-400'}
+                `}
+              >
                 {msg.timestamp.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </div>
             </div>
           </div>
         ))}
+
         {isLoading && (
           <div className="flex justify-start">
-             <div className="bg-white dark:bg-slate-700 rounded-2xl rounded-bl-none px-4 py-3 shadow-sm border border-slate-200 dark:border-slate-600 flex items-center gap-2">
-                <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
-                <span className="text-xs text-slate-500 dark:text-slate-400">Thinking...</span>
-             </div>
+            <div className="bg-white dark:bg-slate-700 rounded-2xl rounded-bl-none px-4 py-3 shadow-sm border border-slate-200 dark:border-slate-600 flex items-center gap-2">
+              <Loader2 className="w-4 h-4 animate-spin text-indigo-500" />
+              <span className="text-xs text-slate-500 dark:text-slate-400">Thinking...</span>
+            </div>
           </div>
         )}
-        <div ref={messagesEndRef} />
       </div>
 
       {/* Input */}
-      <div className="p-4 bg-white dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700">
+      <div className="p-4 bg-white dark:bg-slate-800 border-t border-slate-200 dark:border-slate-700 flex-shrink-0">
         <div className="flex items-center gap-2 relative">
           <textarea
             value={input}

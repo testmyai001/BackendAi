@@ -23,6 +23,7 @@ from tally_service import (
     fetch_existing_ledgers,
     fetch_open_companies,
 )
+from tally_backend_service import tally_service
 from utils import save_upload_file
 
 load_dotenv()
@@ -368,6 +369,121 @@ async def tally_companies():
     except Exception as e:
         logger.error("fetch companies error: %s", traceback.format_exc())
         raise HTTPException(status_code=500, detail=str(e))
+
+
+# ===== NEW EXCEL IMPORT ENDPOINTS =====
+
+@app.get("/tally/excel/status")
+async def excel_import_status():
+    """Check Tally connection for Excel import"""
+    connected = tally_service.check_tally_connection()
+    return {"connected": connected}
+
+
+@app.get("/tally/excel/ledgers")
+async def excel_get_ledgers():
+    """Fetch existing ledgers from Tally (server-side, no CORS issues)"""
+    try:
+        ledgers = tally_service.fetch_existing_ledgers()
+        return {"ledgers": list(ledgers), "count": len(ledgers)}
+    except Exception as e:
+        logger.error(f"Error fetching ledgers: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/tally/excel/import")
+async def excel_import(request: dict):
+    """
+    Import Excel vouchers to Tally
+    
+    Request body:
+    {
+        "vouchers": [
+            {
+                "id": "unique-id",
+                "date": "2025-01-15",
+                "invoiceNo": "INV-001",
+                "partyName": "Supplier Name",
+                "gstin": "27ABCDE1234F1Z5",
+                "voucherType": "Purchase",
+                "items": [
+                    {"amount": 1000, "taxRate": 18, "ledgerName": "Purchase"}
+                ],
+                "totalAmount": 1000
+            }
+        ],
+        "companyName": "Company Name" (optional)
+    }
+    """
+    try:
+        vouchers = request.get("vouchers", [])
+        company_name = request.get("companyName", "##SVCurrentCompany")
+        
+        # Validation: Check if vouchers list is provided
+        if not vouchers:
+            raise HTTPException(status_code=400, detail="No vouchers provided")
+        
+        if not isinstance(vouchers, list):
+            raise HTTPException(status_code=400, detail="Vouchers must be an array")
+        
+        # Validate each voucher
+        for idx, voucher in enumerate(vouchers):
+            if not isinstance(voucher, dict):
+                raise HTTPException(status_code=400, detail=f"Voucher {idx} is not a valid object")
+            
+            # Check required fields
+            required_fields = ['date', 'invoiceNo', 'partyName', 'voucherType', 'items']
+            for field in required_fields:
+                if field not in voucher:
+                    raise HTTPException(status_code=400, detail=f"Voucher {idx} missing required field: {field}")
+            
+            # Validate items array
+            if not isinstance(voucher.get('items'), list) or len(voucher['items']) == 0:
+                raise HTTPException(status_code=400, detail=f"Voucher {idx} has no valid items")
+            
+            # Validate item structure
+            for item_idx, item in enumerate(voucher['items']):
+                if not isinstance(item, dict):
+                    raise HTTPException(status_code=400, detail=f"Voucher {idx} item {item_idx} is not valid")
+                
+                if 'amount' not in item or 'taxRate' not in item:
+                    raise HTTPException(status_code=400, detail=f"Voucher {idx} item {item_idx} missing amount or taxRate")
+                
+                # Ensure amounts are numeric
+                try:
+                    amount = float(item['amount'])
+                    tax_rate = float(item['taxRate'])
+                    
+                    if amount < 0 or tax_rate < 0 or tax_rate > 100:
+                        raise ValueError()
+                except (ValueError, TypeError):
+                    raise HTTPException(status_code=400, detail=f"Voucher {idx} item {item_idx} has invalid amount or tax rate")
+        
+        logger.info(f"Importing {len(vouchers)} vouchers to Tally (company: {company_name})")
+        
+        # Generate XML
+        xml_payload = tally_service.generate_excel_import_xml(
+            vouchers=vouchers,
+            company_name=company_name,
+            create_masters=True
+        )
+        
+        if not xml_payload:
+            raise HTTPException(status_code=400, detail="Failed to generate XML from vouchers")
+        
+        logger.debug(f"Generated XML payload: {len(xml_payload)} bytes")
+        
+        # Push to Tally
+        result = tally_service.push_vouchers_to_tally(xml_payload)
+        
+        logger.info(f"Tally import result: {result}")
+        return result
+        
+    except HTTPException:
+        raise  # Re-raise HTTP exceptions
+    except Exception as e:
+        logger.error(f"Error importing vouchers: {e}\n{traceback.format_exc()}")
+        raise HTTPException(status_code=500, detail=f"Import failed: {str(e)}")
 
 
 if __name__ == "__main__":

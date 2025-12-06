@@ -40,3 +40,19 @@ body {
     -ms-overflow-style: none;
     scrollbar-width: none;
 }
+
+/* Fix for scrollable content areas - ensure flex items can shrink */
+.flex-1 {
+  min-height: 0;
+  min-width: 0;
+}
+
+/* Ensure overflow-y-auto works properly */
+.overflow-y-auto {
+  overflow-y: auto !important;
+  overflow-x: hidden !important;
+}
+
+.overflow-x-auto {
+  overflow-x: auto !important;
+}

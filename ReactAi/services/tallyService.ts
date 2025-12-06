@@ -3,6 +3,20 @@ import { InvoiceData, TallyResponse, BankStatementData, ExcelVoucher } from '../
 import { TALLY_API_URL } from '../constants';
 import { v4 as uuidv4 } from 'uuid';
 
+/**
+ * Tally Service - Frontend side
+ * 
+ * This service now handles:
+ * - Local XML generation for preview/validation
+ * - API calls to backend (NOT direct Tally calls)
+ * - Data transformation from Excel to Tally format
+ * 
+ * All Tally communication goes through: POST http://localhost:8000/tally/excel/import
+ * NOT direct to http://localhost:9000 (that would fail with CORS/Connection errors)
+ */
+
+const BACKEND_URL = 'http://localhost:8000';
+
 // --- HELPER FUNCTIONS ---
 
 const esc = (str: string) => {
@@ -79,7 +93,11 @@ const decodeHtml = (html: string) => {
 export const checkTallyConnection = async (): Promise<{ online: boolean; info: string; mode: 'full' | 'blind' | 'none' }> => {
   try {
      const controller = new AbortController();
-     const timeoutId = setTimeout(() => controller.abort(), 3000); 
+     const timeoutId = setTimeout(() => controller.abort(), 3000);
+     
+     // Suppress console errors during connection check
+     const originalError = console.error;
+     console.error = () => {};
      
      try {
        await fetch(TALLY_API_URL, {
@@ -88,13 +106,15 @@ export const checkTallyConnection = async (): Promise<{ online: boolean; info: s
          signal: controller.signal
        });
        clearTimeout(timeoutId);
+       console.error = originalError;
        return { online: true, info: "Port Is Open (Connected)", mode: 'blind' };
      } catch (fetchError) {
        clearTimeout(timeoutId);
-       // Silently handle connection errors
+       console.error = originalError;
        return { online: false, info: "Tally Not Available", mode: 'none' };
      }
   } catch (e) {
+     console.error = console.error; // Restore if somehow overwritten
      return { online: false, info: "Tally Not Available", mode: 'none' };
   }
 };
@@ -652,6 +672,143 @@ export const fetchOpenCompanies = async (): Promise<string[]> => {
   }
 };
 
+// ============= EXCEL IMPORT - NOW USES BACKEND API =============
+
+/**
+ * Check if Tally is connected via backend
+ */
+export const checkTallyConnectionForExcel = async (): Promise<boolean> => {
+  try {
+    const response = await fetch(`${BACKEND_URL}/tally/excel/status`);
+    if (!response.ok) return false;
+    const data = await response.json();
+    return data.connected === true;
+  } catch (error) {
+    console.warn('Could not check Tally connection:', error);
+    return false;
+  }
+};
+
+/**
+ * Fetch existing ledgers from Tally via backend
+ * This is now server-side, so no CORS issues
+ */
+export const fetchExistingLedgersForExcel = async (): Promise<Set<string>> => {
+  try {
+    const response = await fetch(`${BACKEND_URL}/tally/excel/ledgers`);
+    if (!response.ok) {
+      console.warn('Failed to fetch ledgers, will create all masters');
+      return new Set();
+    }
+    
+    const data = await response.json();
+    const ledgers = data.ledgers || [];
+    console.log(`Fetched ${ledgers.length} existing ledgers from Tally`);
+    return new Set(ledgers);
+  } catch (error) {
+    console.warn('Could not fetch existing ledgers (backend error):', error);
+    return new Set();
+  }
+};
+
+/**
+ * Push Excel vouchers to Tally via backend API
+ * This is the main function that sends data to backend for processing
+ */
+export const pushExcelVouchersToTally = async (
+  vouchers: ExcelVoucher[],
+  companyName?: string
+): Promise<{
+  success: boolean;
+  message: string;
+  createdCount?: number;
+  errorCount?: number;
+}> => {
+  try {
+    if (!vouchers.length) {
+      return { success: false, message: 'No vouchers to import' };
+    }
+
+    // Validate voucher data before sending
+    for (let i = 0; i < vouchers.length; i++) {
+      const v = vouchers[i];
+      if (!v.date || !v.invoiceNo || !v.partyName) {
+        return { 
+          success: false, 
+          message: `Voucher ${i + 1}: Missing required fields (date, invoiceNo, partyName)` 
+        };
+      }
+      if (!v.items || v.items.length === 0) {
+        return { 
+          success: false, 
+          message: `Voucher ${i + 1} (${v.invoiceNo}): No items to import` 
+        };
+      }
+      
+      // Validate items
+      for (let j = 0; j < v.items.length; j++) {
+        const item = v.items[j];
+        if (typeof item.amount !== 'number' || item.amount < 0) {
+          return { 
+            success: false, 
+            message: `Voucher ${i + 1} item ${j + 1}: Invalid amount` 
+          };
+        }
+        if (typeof item.taxRate !== 'number' || item.taxRate < 0 || item.taxRate > 100) {
+          return { 
+            success: false, 
+            message: `Voucher ${i + 1} item ${j + 1}: Invalid tax rate (must be 0-100)` 
+          };
+        }
+      }
+    }
+
+    console.log(`Sending ${vouchers.length} vouchers to backend for Tally import`);
+
+    const response = await fetch(`${BACKEND_URL}/tally/excel/import`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        vouchers: vouchers,
+        companyName: companyName || '##SVCurrentCompany'
+      }),
+    });
+
+    if (!response.ok) {
+      let errorMsg = `HTTP ${response.status}`;
+      try {
+        const errorData = await response.json();
+        errorMsg = errorData.detail || errorMsg;
+      } catch (e) {
+        // Failed to parse error response
+      }
+      
+      return {
+        success: false,
+        message: errorMsg,
+      };
+    }
+
+    const result = await response.json();
+    console.log('Tally import result:', result);
+    
+    return {
+      success: result.success === true,
+      message: result.message || 'Import completed',
+      createdCount: result.createdCount,
+      errorCount: result.errorCount,
+    };
+  } catch (error) {
+    console.error('Error pushing vouchers to backend:', error);
+    return {
+      success: false,
+      message: error instanceof Error ? error.message : 'Unknown error occurred',
+    };
+  }
+};
+
 // --- EXCEL IMPORT SUPPORT ---
 
 export const analyzeLedgerRequirements = (vouchers: ExcelVoucher[], existingLedgers: Set<string>): string[] => {
@@ -697,6 +854,20 @@ export const analyzeLedgerRequirements = (vouchers: ExcelVoucher[], existingLedg
 };
 
 export const generateBulkExcelXml = (vouchers: ExcelVoucher[], existingLedgers: Set<string> = new Set()): string => {
+    // Debug: Log input data
+    console.log('=== EXCEL IMPORT DEBUG ===');
+    console.log('Total vouchers:', vouchers.length);
+    vouchers.forEach((v, idx) => {
+        console.log(`Voucher ${idx}:`, {
+            invoiceNo: v.invoiceNo,
+            type: v.voucherType,
+            partyName: v.partyName,
+            gstin: v.gstin,
+            items: v.items.length,
+            itemDetails: v.items.map(i => ({ amount: i.amount, taxRate: i.taxRate }))
+        });
+    });
+    
     let mastersXml = '';
     let vouchersXml = '';
     const createdMasters = new Set<string>();
@@ -706,12 +877,18 @@ export const generateBulkExcelXml = (vouchers: ExcelVoucher[], existingLedgers: 
     const tallyCompanyName = settingsJson ? JSON.parse(settingsJson).tallyCompany : null;
     const svCompany = tallyCompanyName && tallyCompanyName.trim() ? esc(tallyCompanyName) : '##SVCurrentCompany';
 
-    // 1. Process Masters
+    // 1. Create all required masters first
     vouchers.forEach(voucher => {
         const partyName = cleanName(voucher.partyName);
+        const gstin = voucher.gstin ? String(voucher.gstin).trim().toUpperCase() : '';
+        
+        // Validate GSTIN format (should be 15 chars for valid Indian GSTIN)
+        const validGstin = gstin.length === 15 ? gstin : '';
+        
+        // Create Party Ledger
         if (!existingLedgers.has(partyName) && !createdMasters.has(partyName)) {
-            const group = 'Sundry Creditors'; 
-            const state = getStateName(voucher.gstin);
+            const state = validGstin ? getStateName(validGstin) : '';
+            const group = voucher.voucherType === 'Sales' ? 'Sundry Debtors' : 'Sundry Creditors';
             
             mastersXml += `
             <TALLYMESSAGE xmlns:UDF="TallyUDF">
@@ -720,191 +897,237 @@ export const generateBulkExcelXml = (vouchers: ExcelVoucher[], existingLedgers: 
                     <PARENT>${group}</PARENT>
                     <ISBILLWISEON>Yes</ISBILLWISEON>
                     <ISGSTAPPLICABLE>Yes</ISGSTAPPLICABLE>
-                    ${voucher.gstin ? `<PARTYGSTIN>${esc(voucher.gstin)}</PARTYGSTIN>` : ''}
+                    ${validGstin ? `<PARTYGSTIN>${esc(validGstin)}</PARTYGSTIN>` : ''}
                     ${state ? `<STATENAME>${esc(state)}</STATENAME>` : ''}
                 </LEDGER>
             </TALLYMESSAGE>`;
             createdMasters.add(partyName);
         }
 
-        const gstin = voucher.gstin ? voucher.gstin.trim().toUpperCase() : '';
-        const homeState = '27';
-        const destState = gstin.substring(0, 2);
-        const isInterState = (gstin.length >= 2 && destState !== homeState);
-
+        // Create Item and Tax Ledgers
         voucher.items.forEach(item => {
-             const ledgerName = item.ledgerName || `${voucher.voucherType === 'Sales' ? 'Sale' : 'Purchase'} ${item.taxRate}%`;
-             if (!existingLedgers.has(ledgerName) && !createdMasters.has(ledgerName)) {
+            const taxRate = item.taxRate || 0;
+            const ledgerName = item.ledgerName || `${voucher.voucherType === 'Sales' ? 'Sale' : 'Purchase'} ${formatRate(taxRate)}%`;
+            
+            if (!existingLedgers.has(ledgerName) && !createdMasters.has(ledgerName)) {
                 mastersXml += `
                 <TALLYMESSAGE xmlns:UDF="TallyUDF">
                     <LEDGER NAME="${esc(ledgerName)}" ACTION="Create">
                         <NAME.LIST><NAME>${esc(ledgerName)}</NAME></NAME.LIST>
                         <PARENT>${voucher.voucherType === 'Sales' ? 'Sales Accounts' : 'Purchase Accounts'}</PARENT>
                         <ISGSTAPPLICABLE>Yes</ISGSTAPPLICABLE>
-                        <GSTRATE>${item.taxRate}</GSTRATE>
+                        <GSTRATE>${taxRate}</GSTRATE>
                     </LEDGER>
                 </TALLYMESSAGE>`;
                 createdMasters.add(ledgerName);
-             }
+            }
 
-             if (item.taxRate > 0) {
+            // Create Tax Ledgers
+            if (taxRate > 0) {
+                const gstin = voucher.gstin ? voucher.gstin.trim().toUpperCase() : '';
+                const destState = gstin.substring(0, 2);
+                const isInterState = (gstin.length >= 2 && destState !== '27');
+
                 if (isInterState) {
-                    const taxLedgerName = `${voucher.voucherType === 'Sales' ? 'Output' : 'Input'} IGST ${item.taxRate}%`;
-                    if (!existingLedgers.has(taxLedgerName) && !createdMasters.has(taxLedgerName)) {
+                    const igstName = `${voucher.voucherType === 'Sales' ? 'Output' : 'Input'} IGST ${formatRate(taxRate)}%`;
+                    if (!existingLedgers.has(igstName) && !createdMasters.has(igstName)) {
                         mastersXml += `
                         <TALLYMESSAGE xmlns:UDF="TallyUDF">
-                        <LEDGER NAME="${esc(taxLedgerName)}" ACTION="Create">
-                        <NAME.LIST><NAME>${esc(taxLedgerName)}</NAME></NAME.LIST>
-                        <PARENT>Duties &amp; Taxes</PARENT>
-                        <TAXTYPE>GST</TAXTYPE>
-                        <GSTDUTYHEAD>Integrated Tax</GSTDUTYHEAD>
-                        <GSTRATE>${item.taxRate}</GSTRATE>
-                        </LEDGER>
+                            <LEDGER NAME="${esc(igstName)}" ACTION="Create">
+                                <NAME.LIST><NAME>${esc(igstName)}</NAME></NAME.LIST>
+                                <PARENT>Duties &amp; Taxes</PARENT>
+                                <TAXTYPE>GST</TAXTYPE>
+                                <GSTDUTYHEAD>Integrated Tax</GSTDUTYHEAD>
+                                <GSTRATE>${taxRate}</GSTRATE>
+                            </LEDGER>
                         </TALLYMESSAGE>`;
-                        createdMasters.add(taxLedgerName);
+                        createdMasters.add(igstName);
                     }
                 } else {
-                    const half = item.taxRate / 2;
+                    const half = taxRate / 2;
                     const cgstName = `${voucher.voucherType === 'Sales' ? 'Output' : 'Input'} CGST ${formatRate(half)}%`;
                     const sgstName = `${voucher.voucherType === 'Sales' ? 'Output' : 'Input'} SGST ${formatRate(half)}%`;
 
-                    if (!existingLedgers.has(cgstName) && !createdMasters.has(cgstName)) {
-                        mastersXml += `
-                        <TALLYMESSAGE xmlns:UDF="TallyUDF">
-                        <LEDGER NAME="${esc(cgstName)}" ACTION="Create">
-                        <NAME.LIST><NAME>${esc(cgstName)}</NAME></NAME.LIST>
-                        <PARENT>Duties &amp; Taxes</PARENT>
-                        <TAXTYPE>GST</TAXTYPE>
-                        <GSTDUTYHEAD>Central Tax</GSTDUTYHEAD>
-                        <GSTRATE>${half}</GSTRATE>
-                        </LEDGER>
-                        </TALLYMESSAGE>`;
-                        createdMasters.add(cgstName);
-                    }
-                    if (!existingLedgers.has(sgstName) && !createdMasters.has(sgstName)) {
-                        mastersXml += `
-                        <TALLYMESSAGE xmlns:UDF="TallyUDF">
-                        <LEDGER NAME="${esc(sgstName)}" ACTION="Create">
-                        <NAME.LIST><NAME>${esc(sgstName)}</NAME></NAME.LIST>
-                        <PARENT>Duties &amp; Taxes</PARENT>
-                        <TAXTYPE>GST</TAXTYPE>
-                        <GSTDUTYHEAD>State Tax</GSTDUTYHEAD>
-                        <GSTRATE>${half}</GSTRATE>
-                        </LEDGER>
-                        </TALLYMESSAGE>`;
-                        createdMasters.add(sgstName);
-                    }
+                    [cgstName, sgstName].forEach((taxName, idx) => {
+                        if (!existingLedgers.has(taxName) && !createdMasters.has(taxName)) {
+                            const dutyHead = idx === 0 ? 'Central Tax' : 'State Tax';
+                            mastersXml += `
+                            <TALLYMESSAGE xmlns:UDF="TallyUDF">
+                                <LEDGER NAME="${esc(taxName)}" ACTION="Create">
+                                    <NAME.LIST><NAME>${esc(taxName)}</NAME></NAME.LIST>
+                                    <PARENT>Duties &amp; Taxes</PARENT>
+                                    <TAXTYPE>GST</TAXTYPE>
+                                    <GSTDUTYHEAD>${dutyHead}</GSTDUTYHEAD>
+                                    <GSTRATE>${half}</GSTRATE>
+                                </LEDGER>
+                            </TALLYMESSAGE>`;
+                            createdMasters.add(taxName);
+                        }
+                    });
                 }
-             }
+            }
         });
     });
 
-    // 2. Process Vouchers
-    vouchers.forEach(voucher => {
+    // 2. Create Vouchers with proper accounting entries
+    vouchers.forEach((voucher, vIdx) => {
         const dateXml = formatDateForXml(voucher.date);
         const partyName = cleanName(voucher.partyName);
         const isSales = voucher.voucherType === 'Sales';
-        const gstin = voucher.gstin ? voucher.gstin.trim().toUpperCase() : '';
-        const homeState = '27';
-        const destState = gstin.substring(0, 2);
-        const isInterState = (gstin.length >= 2 && destState !== homeState);
+        const gstin = voucher.gstin ? String(voucher.gstin).trim().toUpperCase() : '';
+        
+        // Validate GSTIN: should be 15 chars, otherwise it's invalid data
+        const validGstin = gstin.length === 15 ? gstin : '';
+        const destState = validGstin ? validGstin.substring(0, 2) : '27';
+        const isInterState = (validGstin.length === 15 && destState !== '27');
 
-        let itemsXml = '';
-        let totalTax = 0;
+        let ledgerEntriesXml = '';
+        let totalAmount = 0;
+        const taxLedgerTotals: { [key: string]: number } = {};
 
-        voucher.items.forEach(item => {
-             const taxable = round(item.amount);
-             const taxAmount = round(taxable * (item.taxRate / 100));
-             totalTax += taxAmount;
-             const ledgerName = item.ledgerName || `${isSales ? 'Sale' : 'Purchase'} ${item.taxRate}%`;
-
-             itemsXml += `
-              <ALLOTTEDLEDGERENTRIES.LIST>
-                <LEDGERNAME>${esc(ledgerName)}</LEDGERNAME>
-                <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-                <AMOUNT>${taxable}</AMOUNT>
-              </ALLOTTEDLEDGERENTRIES.LIST>`;
-
-             if (item.taxRate > 0) {
-                 if (isInterState) {
-                     const taxLedgerName = `${isSales ? 'Output' : 'Input'} IGST ${item.taxRate}%`;
-                     itemsXml += `
-                      <ALLOTTEDLEDGERENTRIES.LIST>
-                        <LEDGERNAME>${esc(taxLedgerName)}</LEDGERNAME>
-                        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-                        <AMOUNT>${taxAmount}</AMOUNT>
-                      </ALLOTTEDLEDGERENTRIES.LIST>`;
-                 } else {
-                     const half = item.taxRate / 2;
-                     const halfTax = round(taxAmount / 2);
-                     const cgstName = `${isSales ? 'Output' : 'Input'} CGST ${formatRate(half)}%`;
-                     const sgstName = `${isSales ? 'Output' : 'Input'} SGST ${formatRate(half)}%`;
-
-                     itemsXml += `
-                      <ALLOTTEDLEDGERENTRIES.LIST>
-                        <LEDGERNAME>${esc(cgstName)}</LEDGERNAME>
-                        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-                        <AMOUNT>${halfTax}</AMOUNT>
-                      </ALLOTTEDLEDGERENTRIES.LIST>
-                      <ALLOTTEDLEDGERENTRIES.LIST>
-                        <LEDGERNAME>${esc(sgstName)}</LEDGERNAME>
-                        <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-                        <AMOUNT>${halfTax}</AMOUNT>
-                      </ALLOTTEDLEDGERENTRIES.LIST>`;
-                 }
-             }
+        console.log(`Processing voucher ${vIdx}:`, {
+            invoiceNo: voucher.invoiceNo,
+            itemCount: voucher.items.length,
+            gstin: voucher.gstin,
+            validGstin: validGstin,
+            isInterState: isInterState,
+            items: voucher.items
         });
 
-        const partyAmount = round(voucher.totalAmount);
+        // Calculate totals and track taxes
+        voucher.items.forEach(item => {
+            const amount = round(item.amount || 0);
+            totalAmount += amount;
+            
+            const taxRate = item.taxRate || 0;
+            if (taxRate > 0) {
+                const taxAmount = round(amount * (taxRate / 100));
+                
+                if (isInterState) {
+                    const taxName = `${isSales ? 'Output' : 'Input'} IGST ${formatRate(taxRate)}%`;
+                    taxLedgerTotals[taxName] = (taxLedgerTotals[taxName] || 0) + taxAmount;
+                } else {
+                    const half = taxRate / 2;
+                    const cgstName = `${isSales ? 'Output' : 'Input'} CGST ${formatRate(half)}%`;
+                    const sgstName = `${isSales ? 'Output' : 'Input'} SGST ${formatRate(half)}%`;
+                    const halfTax = round(taxAmount / 2);
+                    taxLedgerTotals[cgstName] = (taxLedgerTotals[cgstName] || 0) + halfTax;
+                    taxLedgerTotals[sgstName] = (taxLedgerTotals[sgstName] || 0) + (taxAmount - halfTax);
+                }
+            }
+        });
+
+        const finalTotal = round(totalAmount + Object.values(taxLedgerTotals).reduce((a, b) => a + b, 0));
+
+        // Add Item Ledger Entries
+        voucher.items.forEach(item => {
+            const amount = round(item.amount || 0);
+            const taxRate = item.taxRate || 0;
+            const ledgerName = item.ledgerName || `${isSales ? 'Sale' : 'Purchase'} ${formatRate(taxRate)}%`;
+            
+            // Skip if amount is zero
+            if (amount <= 0) {
+                console.warn('Skipping item with zero amount:', item);
+                return;
+            }
+            
+            const amountStr = isSales ? `${amount.toFixed(2)}` : `-${amount.toFixed(2)}`;
+
+            ledgerEntriesXml += `
+            <LEDGERENTRIES.LIST>
+                <LEDGERNAME>${esc(ledgerName)}</LEDGERNAME>
+                <ISDEEMEDPOSITIVE>${isSales ? 'No' : 'Yes'}</ISDEEMEDPOSITIVE>
+                <AMOUNT>${amountStr}</AMOUNT>
+            </LEDGERENTRIES.LIST>`;
+        });
+
+        // Add Tax Ledger Entries
+        Object.entries(taxLedgerTotals).forEach(([name, amount]) => {
+            const amt = round(amount);
+            if (amt > 0) {
+                const amountStr = isSales ? `${amt.toFixed(2)}` : `-${amt.toFixed(2)}`;
+                ledgerEntriesXml += `
+            <LEDGERENTRIES.LIST>
+                <LEDGERNAME>${esc(name)}</LEDGERNAME>
+                <ISDEEMEDPOSITIVE>${isSales ? 'No' : 'Yes'}</ISDEEMEDPOSITIVE>
+                <AMOUNT>${amountStr}</AMOUNT>
+            </LEDGERENTRIES.LIST>`;
+            }
+        });
+
+        // Add Party Ledger Entry (balancing entry)
+        const partyAmountStr = isSales ? `-${finalTotal.toFixed(2)}` : `${finalTotal.toFixed(2)}`;
+        ledgerEntriesXml += `
+        <LEDGERENTRIES.LIST>
+            <LEDGERNAME>${esc(partyName)}</LEDGERNAME>
+            <ISDEEMEDPOSITIVE>${isSales ? 'Yes' : 'No'}</ISDEEMEDPOSITIVE>
+            <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+            <AMOUNT>${partyAmountStr}</AMOUNT>
+            ${validGstin ? `<GSTINVOICENUMBER>${esc(voucher.invoiceNo)}</GSTINVOICENUMBER>` : ''}
+        </LEDGERENTRIES.LIST>`;
+
+        console.log(`Voucher ${voucher.invoiceNo} ledgerEntriesXml:`, {
+            length: ledgerEntriesXml.length,
+            hasContent: ledgerEntriesXml.trim().length > 0,
+            itemCount: voucher.items.length,
+            totalAmount,
+            finalTotal,
+            preview: ledgerEntriesXml.substring(0, 200)
+        });
 
         vouchersXml += `
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER VCHTYPE="${isSales ? 'Sales' : 'Purchase'}" ACTION="Create" OBJVIEW="Invoice Wise">
-            <DATE>${dateXml}</DATE>
-            <REFERENCE>${esc(voucher.invoiceNo)}</REFERENCE>
-            <NARRATION>${esc(voucher.invoiceNo)}</NARRATION>
-            <VOUCHERTYPENAME>${isSales ? 'Sales' : 'Purchase'}</VOUCHERTYPENAME>
-            <VOUCHERNUMBER>${esc(voucher.invoiceNo)}</VOUCHERNUMBER>
-            <PARTYLEDGERENTRIES.LIST>
-              <LEDGERNAME>${esc(partyName)}</LEDGERNAME>
-              <ISDEEMEDPOSITIVE>${isSales ? 'No' : 'Yes'}</ISDEEMEDPOSITIVE>
-              <AMOUNT>${partyAmount}</AMOUNT>
-              ${voucher.gstin ? `<GSTINVOICENUMBER>${esc(voucher.invoiceNo)}</GSTINVOICENUMBER>` : ''}
-            </PARTYLEDGERENTRIES.LIST>
-            ${itemsXml}
-          </VOUCHER>
+            <VOUCHER VCHTYPE="${isSales ? 'Sales' : 'Purchase'}" ACTION="Create">
+                <DATE>${dateXml}</DATE>
+                <REFERENCE>${esc(voucher.invoiceNo)}</REFERENCE>
+                <NARRATION>Inv: ${esc(voucher.invoiceNo)} | Party: ${esc(partyName)}</NARRATION>
+                <VOUCHERTYPENAME>${isSales ? 'Sales' : 'Purchase'}</VOUCHERTYPENAME>
+                <VOUCHERNUMBER>${esc(voucher.invoiceNo)}</VOUCHERNUMBER>
+                <ISINVOICE>Yes</ISINVOICE>
+                ${ledgerEntriesXml}
+            </VOUCHER>
         </TALLYMESSAGE>`;
     });
 
-    return `
+    const finalXml = `
 <ENVELOPE>
-  <HEADER>
-    <TALLYREQUEST>Import Data</TALLYREQUEST>
-  </HEADER>
-  <BODY>
-    <IMPORTDATA>
-      <REQUESTDESC>
-        <REPORTNAME>All Masters</REPORTNAME>
-        <STATICVARIABLES>
-          <SVCURRENTCOMPANY>${svCompany}</SVCURRENTCOMPANY>
-        </STATICVARIABLES>
-      </REQUESTDESC>
-      <REQUESTDATA>
-        ${mastersXml}
-      </REQUESTDATA>
-    </IMPORTDATA>
+    <HEADER>
+        <TALLYREQUEST>Import Data</TALLYREQUEST>
+    </HEADER>
+    <BODY>
+        <IMPORTDATA>
+            <REQUESTDESC>
+                <REPORTNAME>All Masters</REPORTNAME>
+                <STATICVARIABLES>
+                    <SVCURRENTCOMPANY>${svCompany}</SVCURRENTCOMPANY>
+                </STATICVARIABLES>
+            </REQUESTDESC>
+            <REQUESTDATA>
+                ${mastersXml}
+            </REQUESTDATA>
+        </IMPORTDATA>
 
-    <IMPORTDATA>
-      <REQUESTDESC>
-        <REPORTNAME>Vouchers</REPORTNAME>
-        <STATICVARIABLES>
-          <SVCURRENTCOMPANY>${svCompany}</SVCURRENTCOMPANY>
-        </STATICVARIABLES>
-      </REQUESTDESC>
-      <REQUESTDATA>
-        ${vouchersXml}
-      </REQUESTDATA>
-    </IMPORTDATA>
-  </BODY>
+        <IMPORTDATA>
+            <REQUESTDESC>
+                <REPORTNAME>Vouchers</REPORTNAME>
+                <STATICVARIABLES>
+                    <SVCURRENTCOMPANY>${svCompany}</SVCURRENTCOMPANY>
+                </STATICVARIABLES>
+            </REQUESTDESC>
+            <REQUESTDATA>
+                ${vouchersXml}
+            </REQUESTDATA>
+        </IMPORTDATA>
+    </BODY>
 </ENVELOPE>`;
+
+    // Log first voucher structure to help debug
+    if (vouchersXml.length > 0) {
+        const firstVoucherMatch = vouchersXml.match(/<VOUCHER[^>]*>[\s\S]*?<\/VOUCHER>/);
+        if (firstVoucherMatch) {
+            console.log('FIRST VOUCHER STRUCTURE:', firstVoucherMatch[0].substring(0, 1000));
+        }
+    }
+
+    return finalXml;
 };

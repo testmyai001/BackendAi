@@ -3,7 +3,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { FileSpreadsheet, Upload, ArrowRight, Loader2, CheckCircle2, AlertTriangle, Merge, Database, ListPlus, ShieldAlert, RefreshCw } from 'lucide-react';
 import { read, utils } from 'xlsx';
 import { ExcelVoucher, ProcessedFile } from '../types';
-import { generateBulkExcelXml, pushToTally, fetchExistingLedgers, analyzeLedgerRequirements } from '../services/tallyService';
+import { generateBulkExcelXml, pushExcelVouchersToTally, fetchExistingLedgersForExcel, checkTallyConnectionForExcel, analyzeLedgerRequirements } from '../services/tallyService';
 import { v4 as uuidv4 } from 'uuid';
 
 interface ExcelImportManagerProps {
@@ -44,6 +44,14 @@ const ExcelImportManager: React.FC<ExcelImportManagerProps> = ({ onPushLog, onRe
   const [connectionError, setConnectionError] = useState<boolean>(false);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const pageScrollRef = useRef<HTMLDivElement>(null);
+
+  // Auto-scroll page when mapped data updates
+  useEffect(() => {
+    if (pageScrollRef.current && mappedData.length > 0) {
+      pageScrollRef.current.scrollTop = pageScrollRef.current.scrollHeight;
+    }
+  }, [mappedData]);
 
   // Column Mapping State
   const [allColumns, setAllColumns] = useState<string[]>([]);
@@ -54,7 +62,9 @@ const ExcelImportManager: React.FC<ExcelImportManagerProps> = ({ onPushLog, onRe
     gstin: '',
     amount: '',
     taxRate: '',
-    voucherType: ''
+    voucherType: '',
+    quantity: '',
+    rate: ''
   });
 
   const BATCH_SIZE = 50;
@@ -70,7 +80,7 @@ const ExcelImportManager: React.FC<ExcelImportManagerProps> = ({ onPushLog, onRe
       setIsCheckingLedgers(true);
       setConnectionError(false);
       try {
-          const existing = await fetchExistingLedgers();
+          const existing = await fetchExistingLedgersForExcel();
           const missing = analyzeLedgerRequirements(mappedData, existing);
           setMissingLedgers(missing);
       } catch (e) {
@@ -145,13 +155,18 @@ const ExcelImportManager: React.FC<ExcelImportManagerProps> = ({ onPushLog, onRe
 
                     const c = col.toLowerCase();
                     if (c.includes('date')) guess.date = col;
-                    if (c.includes('inv') || c.includes('no')) guess.invoiceNo = col;
-                    if (c.includes('party') || c.includes('name') || c.includes('customer')) guess.partyName = col;
-                    if (c.includes('gst') && !c.includes('rate')) guess.gstin = col;
-                    if (c.includes('amount') || c.includes('value') || c.includes('total') || c.includes('taxable')) guess.amount = col;
-                    if (c.includes('rate') || c.includes('%')) guess.taxRate = col;
-                    if (c.includes('type')) guess.voucherType = col;
+                    if (c.includes('inv') || c.includes('no') || c.includes('bill')) guess.invoiceNo = col;
+                    if (c.includes('party') || c.includes('name') || c.includes('customer') || c.includes('vendor') || c.includes('supplier') || c.includes('buyer') || c.includes('seller')) guess.partyName = col;
+                    if (c.includes('gst') && !c.includes('rate') && !c.includes('%')) guess.gstin = col;
+                    if (c.includes('amount') || c.includes('value') || c.includes('total') || c.includes('taxable') || c.includes('net')) guess.amount = col;
+                    if ((c.includes('rate') || c.includes('%')) && (c.includes('tax') || c.includes('gst'))) guess.taxRate = col;
+                    if (c.includes('type') || c.includes('vch') || c.includes('voucher') || c.includes('transaction') || c.includes('invoice type') || c.includes('document type')) guess.voucherType = col;
+                    if (c.includes('qty') || c.includes('quantity') || c.includes('units') || c.includes('nos')) guess.quantity = col;
+                    if (c.includes('rate') && !c.includes('tax') && !c.includes('gst') && !c.includes('%')) guess.rate = col;
                 });
+                
+                console.log('Auto-guessed mapping:', guess);
+                
                 setMapping(guess);
                 setStep(2);
                 
@@ -173,6 +188,31 @@ const ExcelImportManager: React.FC<ExcelImportManagerProps> = ({ onPushLog, onRe
   };
 
   const processMapping = () => {
+    // Validation: Check if required fields are mapped
+    const requiredFields = ['date', 'invoiceNo', 'partyName', 'amount'];
+    const missingFields = requiredFields.filter(field => !mapping[field as keyof typeof mapping]);
+    
+    if (missingFields.length > 0) {
+        onPushLog('Failed', 'Missing Mappings', `Please map these required columns: ${missingFields.join(', ')}`);
+        return;
+    }
+
+    // Warning: Check if taxRate is mapped
+    if (!mapping.taxRate) {
+        const proceed = window.confirm(
+            'Tax Rate column not mapped. All tax rates will default to 0%. Continue?'
+        );
+        if (!proceed) return;
+    }
+
+    // Warning: Check if voucherType is mapped
+    if (!mapping.voucherType) {
+        const proceed = window.confirm(
+            'Voucher Type column not mapped. All entries will default to "Purchase". Continue?'
+        );
+        if (!proceed) return;
+    }
+
     // 1. Map raw rows to flat objects
     const flatRows = rawData.map((row: any) => {
         const idx = (colName: string) => allColumns.indexOf(colName);
@@ -180,57 +220,123 @@ const ExcelImportManager: React.FC<ExcelImportManagerProps> = ({ onPushLog, onRe
 
         // --- DATE PARSING LOGIC ---
         let dateVal: any = val(mapping.date);
+        let parsedDate = new Date().toISOString().slice(0, 10); // Default to today
         
-        if (typeof dateVal === 'number' || (!isNaN(Number(dateVal)) && Number(dateVal) > 20000)) {
-             const serial = Number(dateVal);
-             const utc_days  = Math.floor(serial - 25569);
-             const utc_value = utc_days * 86400; 
-             const date_info = new Date(utc_value * 1000);
-             
-             const y = date_info.getFullYear();
-             const m = String(date_info.getMonth() + 1).padStart(2, '0');
-             const d = String(date_info.getDate()).padStart(2, '0');
-             dateVal = `${y}-${m}-${d}`;
+        if (typeof dateVal === 'number' && dateVal > 20000) {
+            // Excel serial date format (days since 1900-01-01)
+            try {
+                const serial = Number(dateVal);
+                const utc_days  = Math.floor(serial - 25569);
+                const utc_value = utc_days * 86400; 
+                const date_info = new Date(utc_value * 1000);
+                
+                const y = date_info.getFullYear();
+                const m = String(date_info.getMonth() + 1).padStart(2, '0');
+                const d = String(date_info.getDate()).padStart(2, '0');
+                parsedDate = `${y}-${m}-${d}`;
+            } catch (e) {
+                console.warn('Failed to parse Excel date:', dateVal);
+            }
         } else if (typeof dateVal === 'string') {
-            dateVal = dateVal.trim();
-        } else {
-            dateVal = new Date().toISOString().slice(0, 10);
+            const trimmed = String(dateVal).trim();
+            // Try to parse DD-MM-YYYY or DD/MM/YYYY or YYYY-MM-DD format
+            const ddmmyyMatch = trimmed.match(/^(\d{1,2})[-\/](\d{1,2})[-\/](\d{4})$/);
+            if (ddmmyyMatch) {
+                const [, day, month, year] = ddmmyyMatch;
+                parsedDate = `${year}-${month.padStart(2, '0')}-${day.padStart(2, '0')}`;
+            } else if (/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) {
+                parsedDate = trimmed;
+            }
         }
+        dateVal = parsedDate;
 
-        const vTypeVal = String(val(mapping.voucherType) || '');
-        const vType = vTypeVal.toLowerCase().includes('pur') ? 'Purchase' : 'Sales';
+        const vTypeVal = String(val(mapping.voucherType) || '').toLowerCase().trim();
+        // Better detection: check for 'pur', 'buy', 'prc' for purchase; 'sal', 'sell' for sales
+        const vType = (vTypeVal.includes('pur') || vTypeVal.includes('buy') || vTypeVal.includes('prc') || vTypeVal.includes('purchase')) 
+            ? 'Purchase' 
+            : (vTypeVal.includes('sal') || vTypeVal.includes('sell') || vTypeVal.includes('sale'))
+            ? 'Sales'
+            : 'Purchase'; // Default to Purchase for safety
         
+        // Parse Amount - strict validation
         let rawAmount = val(mapping.amount);
         if (typeof rawAmount === 'string') {
-            rawAmount = parseFloat(rawAmount.replace(/,/g, ''));
+            rawAmount = parseFloat(String(rawAmount).replace(/[,\s]/g, '').trim());
         }
-        rawAmount = Number(rawAmount) || 0;
+        rawAmount = Number(rawAmount);
+        if (isNaN(rawAmount) || rawAmount < 0) {
+            rawAmount = 0;
+        }
 
+        // Parse Tax Rate - handle percentage values
         let rawRate = val(mapping.taxRate);
         if (typeof rawRate === 'string') {
-            rawRate = parseFloat(rawRate.replace(/%/g, ''));
+            rawRate = parseFloat(String(rawRate).replace(/%|,/g, '').trim());
         }
-        rawRate = Number(rawRate) || 0;
+        rawRate = Number(rawRate);
+        if (isNaN(rawRate) || rawRate < 0 || rawRate > 100) {
+            rawRate = 0;
+        }
+        rawRate = Math.round(rawRate * 100) / 100; // Round to 2 decimals
+
+        // Parse quantity if available
+        let rawQuantity = 1;
+        if (mapping.quantity) {
+            const qtyVal = val(mapping.quantity);
+            if (typeof qtyVal === 'string') {
+                rawQuantity = parseFloat(String(qtyVal).replace(/[,\s]/g, '').trim()) || 1;
+            } else {
+                rawQuantity = Number(qtyVal) || 1;
+            }
+            if (isNaN(rawQuantity) || rawQuantity <= 0) {
+                rawQuantity = 1;
+            }
+        }
+
+        // Parse item rate if available, otherwise calculate from amount/quantity
+        let rawItemRate = 1;
+        if (mapping.rate) {
+            const rateVal = val(mapping.rate);
+            if (typeof rateVal === 'string') {
+                rawItemRate = parseFloat(String(rateVal).replace(/[,\s]/g, '').trim()) || 0;
+            } else {
+                rawItemRate = Number(rateVal) || 0;
+            }
+            if (isNaN(rawItemRate) || rawItemRate <= 0) {
+                rawItemRate = rawQuantity > 0 ? rawAmount / rawQuantity : 1;
+            }
+        } else {
+            rawItemRate = rawQuantity > 0 ? rawAmount / rawQuantity : 1;
+        }
+        rawItemRate = Math.round(rawItemRate * 100) / 100; // Round to 2 decimals
 
         return {
             date: String(dateVal),
             invoiceNo: String(val(mapping.invoiceNo) || '').trim(),
-            partyName: String(val(mapping.partyName) || 'Cash').trim(),
-            gstin: String(val(mapping.gstin) || ''),
-            amount: rawAmount,
+            partyName: String(val(mapping.partyName) || 'Unknown Party').trim(),
+            gstin: String(val(mapping.gstin) || '').trim().toUpperCase(),
+            amount: round(rawAmount),
             taxRate: rawRate,
-            voucherType: vType as 'Sales' | 'Purchase'
+            voucherType: vType as 'Sales' | 'Purchase',
+            quantity: Math.round(rawQuantity * 1000) / 1000, // Round to 3 decimals for quantities
+            rate: rawItemRate
         };
-    }).filter(t => t.amount > 0 && t.invoiceNo !== ''); 
+    }).filter(row => {
+        // Only filter out rows with no amount AND no invoice number
+        // Allow zero amounts if invoice number exists (for non-item entries)
+        return row.invoiceNo && row.invoiceNo.trim().length > 0 && row.partyName && row.partyName.trim().length > 0;
+    }); 
 
-    // 2. Group By (InvoiceNo + Date + PartyName)
+    // 2. Group By (InvoiceNo + Date + PartyName) with duplicate detection
     const groupedMap = new Map<string, ExcelVoucher>();
+    let duplicateCount = 0;
 
-    flatRows.forEach(row => {
+    flatRows.forEach((row, idx) => {
+        // Normalize grouping keys
         const cleanInv = row.invoiceNo.trim().toLowerCase();
         const cleanDate = row.date.trim();
         const cleanParty = row.partyName.trim().toLowerCase();
-        const key = `${cleanInv}_${cleanParty}_${cleanDate}`;
+        const key = `${cleanInv}|${cleanParty}|${cleanDate}`;
         
         if (!groupedMap.has(key)) {
             groupedMap.set(key, {
@@ -243,32 +349,45 @@ const ExcelImportManager: React.FC<ExcelImportManagerProps> = ({ onPushLog, onRe
                 items: [],
                 totalAmount: 0
             });
+        } else {
+            duplicateCount++;
         }
 
         const voucher = groupedMap.get(key)!;
         
-        voucher.items.push({
-            amount: row.amount,
-            taxRate: row.taxRate
-        });
-        
-        const taxable = round(row.amount);
-        const taxAmount = round(taxable * (row.taxRate / 100));
-        const lineTotal = round(taxable + taxAmount);
-        
-        voucher.totalAmount = round(voucher.totalAmount + lineTotal);
+        // Only add item if it has a valid amount
+        if (row.amount > 0) {
+            voucher.items.push({
+                amount: round(row.amount),
+                taxRate: row.taxRate,
+                itemName: `Item @ ${row.taxRate}%`,
+                quantity: row.quantity,
+                rate: row.rate
+            });
+            
+            // Calculate total accurately
+            const taxable = round(row.amount);
+            const taxAmount = round(taxable * (row.taxRate / 100));
+            const lineTotal = round(taxable + taxAmount);
+            voucher.totalAmount = round(voucher.totalAmount + lineTotal);
+        }
     });
 
-    const vouchers = Array.from(groupedMap.values());
+    // Filter out vouchers with no items
+    const validVouchers = Array.from(groupedMap.values()).filter(v => v.items.length > 0);
+    
+    if (duplicateCount > 0) {
+        onPushLog('Success', 'Duplicates Consolidated', `Grouped ${duplicateCount} duplicate entries. Total vouchers: ${validVouchers.length}`);
+    }
 
-    setMappedData(vouchers);
-    setProgress({ processed: 0, total: vouchers.length, batch: 0 });
+    setMappedData(validVouchers);
+    setProgress({ processed: 0, total: validVouchers.length, batch: 0 });
     setStep(3);
     
     if (onUpdateFile && fileId) {
          onUpdateFile(fileId, { 
              status: 'Ready', 
-             correctEntries: vouchers.length,
+             correctEntries: validVouchers.length,
              timeTaken: 'Ready to Push'
          });
     }
@@ -280,38 +399,35 @@ const ExcelImportManager: React.FC<ExcelImportManagerProps> = ({ onPushLog, onRe
 
       try {
         const total = mappedData.length;
-        const totalBatches = Math.ceil(total / BATCH_SIZE);
         
-        let existingLedgers = new Set<string>();
-        try {
-            existingLedgers = await fetchExistingLedgers();
-        } catch {
-        }
+        // Get company name from settings
+        const settingsJson = localStorage.getItem('autotally_ai_settings');
+        const companyName = settingsJson ? JSON.parse(settingsJson).tallyCompany : undefined;
 
-        for (let i = 0; i < totalBatches; i++) {
-            const start = i * BATCH_SIZE;
-            const end = start + BATCH_SIZE;
-            const batch = mappedData.slice(start, end);
-            
-            const xml = generateBulkExcelXml(batch, existingLedgers);
-            
-            await pushToTally(xml);
-            
-            setProgress({ 
-                processed: Math.min(end, total), 
-                total, 
-                batch: i + 1 
-            });
-
-            await new Promise(r => setTimeout(r, 200));
-        }
+        // Send all vouchers at once to backend
+        // Backend will handle batching internally if needed
+        console.log(`Sending ${total} vouchers to backend for Tally import`);
         
-        onPushLog('Success', 'Bulk Import Complete', `Successfully pushed ${total} merged vouchers.`);
-        if (onUpdateFile && fileId) onUpdateFile(fileId, { status: 'Success' });
+        const result = await pushExcelVouchersToTally(mappedData, companyName);
+        
+        setProgress({ 
+            processed: total, 
+            total, 
+            batch: 1 
+        });
+
+        if (result.success) {
+            onPushLog('Success', 'Import Complete', `Successfully imported ${result.createdCount || total} vouchers to Tally`);
+            if (onUpdateFile && fileId) onUpdateFile(fileId, { status: 'Success' });
+        } else {
+            onPushLog('Failed', 'Import Failed', result.message);
+            if (onUpdateFile && fileId) onUpdateFile(fileId, { status: 'Failed', error: result.message });
+        }
 
       } catch (e) {
-        onPushLog('Failed', 'Bulk Import Error', e instanceof Error ? e.message : 'Unknown Error');
-        if (onUpdateFile && fileId) onUpdateFile(fileId, { status: 'Failed', error: e instanceof Error ? e.message : 'Unknown' });
+        const errorMsg = e instanceof Error ? e.message : 'Unknown Error';
+        onPushLog('Failed', 'Bulk Import Error', errorMsg);
+        if (onUpdateFile && fileId) onUpdateFile(fileId, { status: 'Failed', error: errorMsg });
       } finally {
           setIsProcessing(false);
       }
@@ -417,7 +533,7 @@ const ExcelImportManager: React.FC<ExcelImportManagerProps> = ({ onPushLog, onRe
   const pct = progress.total > 0 ? Math.round((progress.processed / progress.total) * 100) : 0;
 
   return (
-      <div className="flex-1 flex flex-col p-6 animate-fade-in h-full overflow-hidden">
+      <div ref={pageScrollRef} className="flex-1 flex flex-col p-6 animate-fade-in h-full overflow-hidden">
         <div className="flex flex-col gap-6 h-full overflow-y-auto">
             
             <div className="w-full bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 shadow-xl flex flex-col items-center justify-center p-10 text-center relative overflow-hidden shrink-0">

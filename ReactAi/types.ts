@@ -98,6 +98,24 @@ export interface TallyResponse {
 export interface AISettings {
   apiKey: string;
   model: string;
+  tallyCompany?: string;
+}
+
+export interface ExcelVoucherItem {
+  amount: number;
+  taxRate: number;
+  ledgerName?: string;
+}
+
+export interface ExcelVoucher {
+  id: string;
+  date: string;
+  invoiceNo: string;
+  partyName: string;
+  gstin: string;
+  voucherType: 'Sales' | 'Purchase';
+  items: ExcelVoucherItem[];
+  totalAmount: number;
 }
 
 export enum AppView {

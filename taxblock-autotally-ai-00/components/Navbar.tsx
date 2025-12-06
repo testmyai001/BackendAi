@@ -16,6 +16,7 @@ import {
   Search,
   ChevronDown,
   Calculator,
+  FileSpreadsheet,
   Settings
 } from 'lucide-react';
 import { AppView } from '../types';
@@ -26,11 +27,11 @@ interface NavbarProps {
   onChangeView: (view: AppView) => void;
   darkMode: boolean;
   toggleDarkMode: () => void;
-  tallyStatus: { online: boolean; msg: string; mode: 'full' | 'blind' | 'none' };
+  tallyStatus: { online: boolean; msg: string; activeCompany?: string };
   onCheckStatus: () => void;
   searchTerm: string;
   onSearchChange: (term: string) => void;
-  onOpenSettings?: () => void;
+  onOpenSettings: () => void;
 }
 
 const Navbar: React.FC<NavbarProps> = ({ 
@@ -71,7 +72,7 @@ const Navbar: React.FC<NavbarProps> = ({
       children: [
         { id: AppView.UPLOAD, label: 'Invoice Upload', icon: FileText },
         { id: AppView.BANK_STATEMENT, label: 'Bank Statement', icon: Landmark },
-        { id: AppView.EXCEL_IMPORT, label: 'Excel Import', icon: FileText }
+        { id: AppView.EXCEL_IMPORT, label: 'Excel Import', icon: FileSpreadsheet }
       ]
     },
     { id: AppView.EDITOR, label: 'Editor', icon: FileText },
@@ -120,7 +121,11 @@ const Navbar: React.FC<NavbarProps> = ({
                       : 'text-red-400 border-red-500/30'}
               `}>
                   {tallyStatus.online ? <Wifi className="w-3.5 h-3.5" /> : <WifiOff className="w-3.5 h-3.5" />}
-                  <span>{tallyStatus.online ? 'Connected' : 'Disconnected'}</span>
+                  <span>
+                    {tallyStatus.online 
+                        ? (tallyStatus.activeCompany ? `${tallyStatus.activeCompany}` : 'Connected') 
+                        : 'Disconnected'}
+                  </span>
                   <span className={`w-1.5 h-1.5 rounded-full ${tallyStatus.online ? 'bg-emerald-500' : 'bg-red-500'} animate-pulse`}></span>
               </div>
 
@@ -135,9 +140,18 @@ const Navbar: React.FC<NavbarProps> = ({
 
                  <button
                     onClick={toggleDarkMode}
+                    title="Toggle Dark Mode"
                     className="p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
                  >
                     {darkMode ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+                 </button>
+
+                 <button
+                    onClick={onOpenSettings}
+                    title="Settings"
+                    className="p-2 rounded-lg hover:bg-slate-800 text-slate-400 hover:text-white transition-colors"
+                 >
+                    <Settings className="w-4 h-4" />
                  </button>
              </div>
         </div>
@@ -235,15 +249,6 @@ const Navbar: React.FC<NavbarProps> = ({
           >
               <Calculator className="w-3.5 h-3.5" />
               <span>Tax Calc</span>
-          </button>
-
-          {/* Settings Button */}
-          <button
-              onClick={() => onOpenSettings?.()}
-              className="flex items-center gap-2 px-4 py-1.5 rounded-md text-xs font-bold whitespace-nowrap transition-all text-slate-400 hover:text-slate-200 hover:bg-slate-800"
-              title="Settings"
-          >
-              <Settings className="w-3.5 h-3.5" />
           </button>
 
           {showCalculator && <AccountingCalculator onClose={() => setShowCalculator(false)} />}

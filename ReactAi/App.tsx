@@ -9,12 +9,15 @@ import InvoiceUpload from './components/InvoiceUpload';
 import ChatBot from './components/ChatBot';
 import ImageAnalyzer from './components/ImageAnalyzer';
 import BankStatementManager from './components/BankStatementManager';
+import ExcelImportManager from './components/ExcelImportManager';
+import SettingsModal from './components/SettingsModal';
 import Navbar from './components/Navbar';
 import InvalidFileModal from './components/InvalidFileModal';
-import { InvoiceData, LogEntry, AppView, ProcessedFile } from './types';
+import MismatchModal from './components/MismatchModal';
+import { InvoiceData, LogEntry, AppView, ProcessedFile, BankStatementData } from './types';
 import { ArrowRight, Loader2, CheckCircle2, X, FileText, Landmark, AlertTriangle } from 'lucide-react';
 import { generateTallyXml, pushToTally, fetchExistingLedgers, checkTallyConnection } from './services/tallyService';
-import { parseInvoiceWithGemini } from './services/backendService';
+import { parseInvoiceWithGemini, parseBankStatementWithGemini } from './services/backendService';
 import { TALLY_API_URL } from './constants';
 import { v4 as uuidv4 } from 'uuid';
 
@@ -33,13 +36,26 @@ const App: React.FC = () => {
   
   // Inter-module File Passing (Redirect Logic)
   const [pendingBankStatementFile, setPendingBankStatementFile] = useState<File | null>(null);
-  const [mismatchedFileAlert, setMismatchedFileAlert] = useState<{show: boolean, file: ProcessedFile | null}>({ show: false, file: null });
+  
+  // Mismatch Detection State
+  const [invoiceMismatch, setInvoiceMismatch] = useState<{
+    show: boolean;
+    file: ProcessedFile | null;
+    detectedType: 'BANK_STATEMENT' | null;
+  }>({ show: false, file: null, detectedType: null });
+
+  const [bankMismatch, setBankMismatch] = useState<{
+    show: boolean;
+    file: ProcessedFile | null;
+    detectedType: 'INVOICE' | null;
+  }>({ show: false, file: null, detectedType: null });
 
   // Invalid File Alert Logic
   const [invalidFileAlert, setInvalidFileAlert] = useState<{show: boolean, fileName: string, reason: string}>({ show: false, fileName: '', reason: '' });
 
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isPushing, setIsPushing] = useState(false);
+  const [showSettingsModal, setShowSettingsModal] = useState(false);
 
   // Toast State
   const [toast, setToast] = useState<{show: boolean, message: string}>({ show: false, message: '' });
@@ -73,12 +89,10 @@ const App: React.FC = () => {
   }, [toast.show]);
 
   // Tally Connection State
-  const [tallyStatus, setTallyStatus] = useState<{online: boolean; msg: string; mode: 'full' | 'blind' | 'none'}>({ online: false, msg: 'Connecting...', mode: 'none' });
+  const [tallyStatus, setTallyStatus] = useState<{online: boolean; msg: string; mode: 'full' | 'blind' | 'none'}>({ online: false, msg: 'Tally Optional - Click to Check', mode: 'none' });
 
-  // Initial Connection Check
-  useEffect(() => {
-    checkStatus();
-  }, []);
+  // Removed automatic Tally check on app load to prevent ERR_CONNECTION_RESET
+  // Users can manually check status using the Check Status button in the UI
 
   // --- Auto-Selection & Sync Logic ---
 
@@ -204,7 +218,7 @@ const App: React.FC = () => {
       try {
           const data = await parseInvoiceWithGemini(entry.file);
           
-          // DETECT TYPE MISMATCH
+          // DETECT TYPE MISMATCH - Bank Statement uploaded to Invoice upload
           if (data.documentType === 'BANK_STATEMENT') {
                setProcessedFiles(prev => prev.map(f => {
                    if (f.id === entry.id) {
@@ -220,10 +234,11 @@ const App: React.FC = () => {
                    return f;
                }));
                
-               // Show Alert
-               setMismatchedFileAlert({
+               // Show Mismatch Modal
+               setInvoiceMismatch({
                    show: true,
-                   file: { ...entry, status: 'Mismatch', data: data }
+                   file: { ...entry, status: 'Mismatch', data: data },
+                   detectedType: 'BANK_STATEMENT'
                });
                return; // Stop processing this file as an invoice
           }
@@ -289,9 +304,9 @@ const App: React.FC = () => {
       }
   };
 
-  // --- REDIRECT LOGIC ---
-  const handleSwitchToBankStatement = () => {
-      const fileToMove = mismatchedFileAlert.file;
+  // --- REDIRECT LOGIC for Invoice -> Bank Statement ---
+  const handleRedirectToBankStatement = () => {
+      const fileToMove = invoiceMismatch.file;
       if (fileToMove) {
           // 1. Remove from processed files list
           setProcessedFiles(prev => prev.filter(f => f.id !== fileToMove.id));
@@ -299,16 +314,46 @@ const App: React.FC = () => {
           // 2. Set as pending for Bank Statement
           setPendingBankStatementFile(fileToMove.file);
           
-          // 3. Switch View
+          // 3. Switch view
           setCurrentView(AppView.BANK_STATEMENT);
-          setMismatchedFileAlert({ show: false, file: null });
+          
+          // 4. Close modal
+          setInvoiceMismatch({ show: false, file: null, detectedType: null });
       }
   };
-  
-  const handleRedirectToInvoice = (file: File) => {
-      // Logic when Bank Statement Manager sends a file back
-      setCurrentView(AppView.DASHBOARD);
-      handleBulkUpload([file]);
+
+  // --- REDIRECT LOGIC for Bank Statement -> Invoice ---
+  const handleRedirectToInvoice = () => {
+      if (bankMismatch.file) {
+          const fileToMove = bankMismatch.file;
+          
+          // 1. Remove from processed files list
+          setProcessedFiles(prev => prev.filter(f => f.id !== fileToMove.id));
+          
+          // 2. Add back to invoice processing
+          const newEntry: ProcessedFile = {
+              id: uuidv4(),
+              file: fileToMove.file,
+              fileName: fileToMove.fileName,
+              status: 'Pending',
+              sourceType: 'OCR_INVOICE',
+              correctEntries: 0,
+              incorrectEntries: 0,
+              timeTaken: '-',
+              uploadTimestamp: Date.now()
+          };
+          
+          setProcessedFiles(prev => [newEntry, ...prev]);
+          
+          // 3. Switch view
+          setCurrentView(AppView.UPLOAD);
+          
+          // 4. Process the file
+          processSingleFile(newEntry);
+          
+          // 5. Close modal
+          setBankMismatch({ show: false, file: null, detectedType: null });
+      }
   };
 
   const handleRetryFailed = () => {
@@ -319,7 +364,9 @@ const App: React.FC = () => {
   const handleViewInvoice = (file: ProcessedFile) => {
       if (file.status === 'Mismatch') {
           // Re-trigger mismatch alert if user clicks view on a mismatched file
-          setMismatchedFileAlert({ show: true, file });
+          if (file.data?.documentType === 'BANK_STATEMENT') {
+              setInvoiceMismatch({ show: true, file: file, detectedType: 'BANK_STATEMENT' });
+          }
           return;
       }
 
@@ -704,36 +751,29 @@ const App: React.FC = () => {
           />
       )}
 
-      {/* GLOBAL MODAL: Document Type Mismatch */}
-      {mismatchedFileAlert.show && mismatchedFileAlert.file && (
-          <div className="absolute inset-0 z-[100] flex items-center justify-center bg-slate-900/60 backdrop-blur-sm p-4 animate-fade-in">
-              <div className="bg-white dark:bg-slate-800 p-8 rounded-xl shadow-2xl border-2 border-orange-400 max-w-md w-full text-center">
-                  <div className="w-16 h-16 bg-orange-100 dark:bg-orange-900/30 text-orange-600 rounded-full flex items-center justify-center mx-auto mb-4">
-                      <Landmark className="w-8 h-8" />
-                  </div>
-                  <h3 className="text-xl font-bold text-slate-900 dark:text-white">Bank Statement Detected!</h3>
-                  <p className="text-slate-500 dark:text-slate-400 mt-2 mb-6">
-                      You uploaded <span className="font-semibold text-slate-800 dark:text-slate-200">{mismatchedFileAlert.file.fileName}</span> in the Invoice section, but it appears to be a Bank Statement.
-                  </p>
-                  
-                  <div className="flex flex-col gap-3">
-                      <button 
-                          onClick={handleSwitchToBankStatement}
-                          className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg font-bold shadow-lg transition-transform hover:-translate-y-1 flex items-center justify-center gap-2"
-                      >
-                          <ArrowRight className="w-4 h-4" />
-                          Process as Bank Statement
-                      </button>
-                      <button 
-                          onClick={() => setMismatchedFileAlert({show: false, file: null})}
-                          className="w-full py-3 text-slate-500 hover:text-slate-700 dark:text-slate-400 dark:hover:text-slate-200 font-semibold"
-                      >
-                          Cancel / Delete
-                      </button>
-                  </div>
-              </div>
-          </div>
-      )}
+      {/* GLOBAL MODAL: Invoice Upload - Bank Statement Detected */}
+      <MismatchModal
+        isOpen={invoiceMismatch.show}
+        uploadedAs="INVOICE"
+        detectedAs="BANK_STATEMENT"
+        onRedirect={handleRedirectToBankStatement}
+        onDismiss={() => {
+            setProcessedFiles(prev => prev.filter(f => f.id !== invoiceMismatch.file?.id));
+            setInvoiceMismatch({ show: false, file: null, detectedType: null });
+        }}
+      />
+
+      {/* GLOBAL MODAL: Bank Statement Upload - Invoice Detected */}
+      <MismatchModal
+        isOpen={bankMismatch.show}
+        uploadedAs="BANK_STATEMENT"
+        detectedAs="INVOICE"
+        onRedirect={handleRedirectToInvoice}
+        onDismiss={() => {
+            setProcessedFiles(prev => prev.filter(f => f.id !== bankMismatch.file?.id));
+            setBankMismatch({ show: false, file: null, detectedType: null });
+        }}
+      />
 
       {/* Top Navigation Bar */}
       <Navbar 
@@ -745,6 +785,7 @@ const App: React.FC = () => {
         onCheckStatus={checkStatus}
         searchTerm={searchTerm}
         onSearchChange={setSearchTerm}
+        onOpenSettings={() => setShowSettingsModal(true)}
       />
 
       {/* Main Content Area */}
@@ -809,7 +850,23 @@ const App: React.FC = () => {
                 <BankStatementManager 
                     onPushLog={handlePushLog} 
                     externalFile={pendingBankStatementFile}
-                    onRedirectToInvoice={handleRedirectToInvoice}
+                    onMismatchDetected={(file, detectedType) => {
+                        setBankMismatch({
+                            show: true,
+                            file: {
+                                id: uuidv4(),
+                                file: file,
+                                fileName: file.name,
+                                status: 'Mismatch',
+                                sourceType: 'BANK_STATEMENT',
+                                correctEntries: 0,
+                                incorrectEntries: 0,
+                                timeTaken: '0',
+                                uploadTimestamp: Date.now()
+                            },
+                            detectedType: 'INVOICE'
+                        });
+                    }}
                 />
             </div>
 
@@ -823,11 +880,22 @@ const App: React.FC = () => {
                 <ImageAnalyzer />
             </div>
 
+            {/* EXCEL IMPORT */}
+            <div className={getViewClass(AppView.EXCEL_IMPORT)}>
+                <ExcelImportManager 
+                    onPushLog={handlePushLog}
+                />
+            </div>
+
             {/* LOGS */}
             <div className={getViewClass(AppView.LOGS)}>
                 <TallyLogs logs={logs} />
             </div>
 
+            {/* Settings Modal */}
+            {showSettingsModal && (
+                <SettingsModal onClose={() => setShowSettingsModal(false)} />
+            )}
             
             {/* Toast Notification */}
             {toast.show && (

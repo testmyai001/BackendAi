@@ -9,13 +9,13 @@
     "preview": "vite preview"
   },
   "dependencies": {
-    "@types/xlsx": "^0.0.35",
-    "lucide-react": "^0.554.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
+    "@google/genai": "^1.30.0",
     "recharts": "^3.4.1",
+    "lucide-react": "^0.554.0",
     "uuid": "^13.0.0",
-    "xlsx": "^0.18.5"
+    "xlsx": "latest"
   },
   "devDependencies": {
     "@types/node": "^22.14.0",
